@@ -629,7 +629,7 @@
                             </div>
                             <div class="space-y-2">
                                 <label for="group_name" class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">กลุ่ม <span class="text-zinc-600 font-normal normal-case tracking-normal">(ไม่บังคับ)</span></label>
-                                <input type="text" id="group_name" name="group_name" bind:value={studentGroup} placeholder="เช่น กลุ่ม 1"
+                                <input type="text" id="group_name" name="group_name" bind:value={studentGroup} placeholder="เช่น กลุ่ม 1, ทีม A (ถ้ามี)"
                                     class="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all text-sm">
                             </div>
                         </div>
