@@ -1,0 +1,1600 @@
+<!DOCTYPE html>
+<html lang="th" class="h-full bg-zinc-950 text-zinc-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Temp</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Prompt:wght@200;300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Outfit', 'Prompt', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#f5f3ff',
+                            100: '#ede9fe',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                            900: '#312e81',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- JSZip & Image Compression CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.js"></script>
+
+    <style>
+        .glass {
+            background: rgba(24, 24, 27, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(63, 63, 70, 0.4);
+        }
+        .glass-hover:hover {
+            background: rgba(39, 39, 42, 0.8);
+            border-color: rgba(99, 102, 241, 0.4);
+            transform: translateY(-2px);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .glow-bg {
+            position: absolute;
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, rgba(0,0,0,0) 70%);
+            filter: blur(60px);
+            pointer-events: none;
+            z-index: 0;
+        }
+        .explorer-grid-layout {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+            gap: 12px;
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #09090b;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #27272a;
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #3f3f46;
+        }
+        /* Shimmer effect */
+        @keyframes shimmer {
+            100% { transform: translateX(100%); }
+        }
+        .shimmer {
+            position: relative;
+            overflow: hidden;
+        }
+        .shimmer::after {
+            position: absolute;
+            top: 0; right: 0; bottom: 0; left: 0;
+            transform: translateX(-100%);
+            background-image: linear-gradient(
+                90deg,
+                rgba(255, 255, 255, 0) 0%,
+                rgba(255, 255, 255, 0.05) 20%,
+                rgba(255, 255, 255, 0.1) 60%,
+                rgba(255, 255, 255, 0) 100%
+            );
+            animation: shimmer 2s infinite;
+            content: '';
+        }
+    </style>
+</head>
+<body class="h-full flex flex-col font-sans overflow-x-hidden relative">
+
+    <!-- Glowing Blobs -->
+    <div class="glow-bg top-[-10%] left-[-10%]"></div>
+    <div class="glow-bg bottom-[-10%] right-[-10%]"></div>
+
+    <!-- Navigation Header -->
+    <header class="sticky top-0 z-50 glass border-b border-zinc-800/80 px-4 py-3 sm:px-6 lg:px-8">
+        <div class="max-w-7xl mx-auto flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div>
+                    <h1 class="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-zinc-200 to-zinc-400">Temp</h1>
+                </div>
+            </div>
+            
+            <!-- Mode Switcher -->
+            <div class="flex bg-zinc-900/90 p-1.5 rounded-xl border border-zinc-800 shadow-inner">
+                <button id="btn-portal" onclick="switchView('portal')" class="flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-300 bg-brand-600 text-white shadow-md shadow-brand-600/10">
+                    <i data-lucide="send" class="w-4 h-4"></i>
+                    <span>ส่งรูปภาพ</span>
+                </button>
+                <button id="btn-admin" onclick="switchView('admin')" class="flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-300 text-zinc-400 hover:text-zinc-200">
+                    <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
+                    <span>ระบบจัดการหลังบ้าน</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 py-6 sm:px-6 lg:px-8 z-10">
+
+        <!-- ================= FRONTEND SUBMISSION PORTAL ================= -->
+        <section id="view-portal" class="space-y-6 max-w-2xl mx-auto py-4">
+            <div class="text-center space-y-2">
+                <span class="px-3 py-1 text-xs font-semibold text-brand-500 bg-brand-500/10 rounded-full border border-brand-500/20">Portal ส่งรูปภาพ</span>
+                <h2 class="text-3xl font-extrabold tracking-tight sm:text-4xl bg-gradient-to-r from-white to-zinc-400 bg-clip-text text-transparent">เก็บภาพชั่วคราว</h2>
+            </div>
+
+            <!-- Upload Form Card -->
+            <div class="glass rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden border border-zinc-800/80">
+                <div class="absolute top-0 left-0 w-full h-[3px] bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"></div>
+                
+                <form id="submission-form" onsubmit="handleFormSubmit(event)" class="space-y-6">
+                    <!-- Personal Information Grid -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div class="space-y-2">
+                            <label for="sub-name" class="block text-sm font-medium text-zinc-300">ชื่อผู้ส่ง / ชื่อเจ้าของผลงาน <span class="text-rose-500">*</span></label>
+                            <div class="relative">
+                                <input type="text" id="sub-name" required placeholder="เช่น สมชาย ใจดี" class="w-full bg-zinc-900/60 border border-zinc-700/80 rounded-xl pl-10 pr-4 py-3 text-zinc-200 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all">
+                                <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-500">
+                                    <i data-lucide="user" class="w-4 h-4"></i>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="space-y-2">
+                            <label for="sub-group" class="block text-sm font-medium text-zinc-300">กลุ่ม / ห้อง <span class="text-rose-500">*</span></label>
+                            <div class="relative">
+                                <input type="text" id="sub-group" required placeholder="เช่น กลุ่ม 1, ม.5/1" class="w-full bg-zinc-900/60 border border-zinc-700/80 rounded-xl pl-10 pr-4 py-3 text-zinc-200 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all">
+                                <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-500">
+                                    <i data-lucide="users" class="w-4 h-4"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Collection (Category) selection -->
+                    <div class="space-y-2">
+                        <label class="block text-sm font-medium text-zinc-300">
+                            <span>หัวข้อการส่งรูปภาพ / หมวดหมู่ <span class="text-rose-500">*</span></span>
+                        </label>
+                        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2" id="collection-radio-container">
+                            <!-- Dynamic Radio Buttons loaded via JS -->
+                        </div>
+                    </div>
+
+                    <!-- File Uploader Drag & Drop -->
+                    <div class="space-y-2">
+                        <label class="block text-sm font-medium text-zinc-300">ไฟล์ภาพที่ต้องการส่ง <span class="text-rose-500">*</span></label>
+                        <div id="dropzone" class="border-2 border-dashed border-zinc-700/80 hover:border-brand-500 rounded-2xl p-6 text-center cursor-pointer transition-all duration-300 bg-zinc-900/30 flex flex-col items-center justify-center min-h-[200px]"
+                             onclick="document.getElementById('file-input').click()"
+                             ondragover="event.preventDefault(); this.classList.add('border-brand-500', 'bg-zinc-800/20')"
+                             ondragleave="this.classList.remove('border-brand-500', 'bg-zinc-800/20')"
+                             ondrop="handleFileDrop(event)">
+                            
+                            <input type="file" id="file-input" required accept="image/*" class="hidden" onchange="handleFileSelect(event)">
+                            
+                            <div id="upload-prompt" class="space-y-3">
+                                <div class="p-3 bg-zinc-800/80 rounded-full text-zinc-400 inline-block">
+                                    <i data-lucide="cloud-upload" class="w-8 h-8 text-brand-500"></i>
+                                </div>
+                                <div>
+                                    <p class="text-sm font-semibold text-zinc-200">ลากและวางรูปภาพที่นี่ หรือคลิกเพื่อเลือกไฟล์</p>
+                                    <p class="text-xs text-zinc-500 mt-1">รองรับ JPG, PNG, AVIF, WebP (จำกัดสูงสุด 15MBต่อไฟล์)</p>
+                                </div>
+                            </div>
+
+                            <!-- Preview Container & Compression Stats -->
+                            <div id="upload-preview" class="hidden w-full space-y-4">
+                                <div class="relative inline-block max-w-[200px] rounded-xl overflow-hidden shadow-lg border border-zinc-700">
+                                    <img id="preview-image" src="" alt="Preview" class="h-32 w-auto object-cover mx-auto cursor-pointer" onclick="openPreviewImageLightbox(event)" title="คลิกเพื่อดูรูปขนาดเต็ม">
+                                    <button type="button" onclick="resetFile(event)" class="absolute top-1.5 right-1.5 bg-zinc-950/80 hover:bg-rose-600 text-white rounded-full p-1.5 transition-colors">
+                                        <i data-lucide="x" class="w-4 h-4"></i>
+                                    </button>
+                                </div>
+
+                                <!-- Live Compression Details (Mock & Actual) -->
+                                <div class="bg-zinc-950/80 border border-zinc-800/80 rounded-xl p-3 max-w-md mx-auto text-left space-y-2 text-xs">
+                                    <div class="flex justify-between items-center text-zinc-400">
+                                        <span>สถานะการประมวลผล:</span>
+                                        <span id="compression-status" class="text-emerald-500 font-medium flex items-center">
+                                            <i data-lucide="circle-check" class="w-3.5 h-3.5 mr-1"></i> ย่อขนาดสำเร็จ
+                                        </span>
+                                    </div>
+                                    <div class="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                                        <div id="compress-progress-bar" class="h-full bg-emerald-500 transition-all duration-500" style="width: 100%;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <button type="submit" id="btn-submit" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-medium py-3.5 px-4 rounded-xl shadow-lg shadow-brand-500/20 hover:shadow-brand-600/30 transition-all duration-300 flex items-center justify-center space-x-2">
+                        <i data-lucide="send" class="w-4 h-4"></i>
+                        <span>ส่งผลงานและอัปโหลดไปยัง Storage</span>
+                    </button>
+                </form>
+            </div>
+        </section>
+
+        <!-- ================= ADMIN MANAGEMENT DASHBOARD ================= -->
+        <section id="view-admin" class="hidden space-y-6">
+            <!-- Dashboard Title / Action bar -->
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-zinc-800 pb-5">
+                <div>
+                    <h2 class="text-2xl font-bold tracking-tight text-white flex items-center">
+                        <i data-lucide="layout-dashboard" class="w-6 h-6 mr-2 text-brand-500"></i>
+                        แดชบอร์ดจัดการภาพผลงาน
+                    </h2>
+                    <p class="text-zinc-400 text-sm mt-1">บริหารจัดการหัวข้อเปิดรับรูปภาพ และดาวน์โหลดรูปภาพที่ส่งเข้ามาในฟอร์แมต ZIP สำหรับการประเมินผล</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <button onclick="openAddCollectionModal()" class="bg-zinc-900 border border-zinc-700 hover:border-brand-500 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center space-x-2">
+                        <i data-lucide="folder-plus" class="w-4 h-4 text-brand-500"></i>
+                        <span>เพิ่มหัวข้อใหม่</span>
+                    </button>
+                    <button onclick="downloadSelectedZip()" class="bg-brand-600 hover:bg-brand-700 px-4 py-2.5 rounded-xl text-sm font-medium transition-all text-white flex items-center space-x-2 shadow-lg shadow-brand-600/10">
+                        <i data-lucide="download" class="w-4 h-4"></i>
+                        <span>ดาวน์โหลด ZIP ที่เลือก</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Stats Grid -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div class="glass p-5 rounded-2xl relative overflow-hidden">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs text-zinc-500 font-semibold uppercase tracking-wider">ภาพที่ส่งเข้ามาทั้งหมด</p>
+                            <h3 id="stat-total-submissions" class="text-3xl font-bold mt-2">0</h3>
+                        </div>
+                        <div class="p-3 bg-brand-500/10 rounded-xl text-brand-500 border border-brand-500/20">
+                            <i data-lucide="images" class="w-6 h-6"></i>
+                        </div>
+                    </div>
+                </div>
+                <div class="glass p-5 rounded-2xl">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs text-zinc-500 font-semibold uppercase tracking-wider">หัวข้อเปิดรับรูปภาพ</p>
+                            <h3 id="stat-active-collections" class="text-3xl font-bold mt-2 text-indigo-400">0 / 0</h3>
+                        </div>
+                        <div class="p-3 bg-indigo-500/10 rounded-xl text-indigo-400 border border-indigo-500/20">
+                            <i data-lucide="folder-git-2" class="w-6 h-6"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Two Column Area -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Left Column: Collections Management -->
+                <div class="lg:col-span-1 space-y-4">
+                    <div class="glass p-5 rounded-2xl space-y-4">
+                        <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+                            <h3 class="font-bold text-sm text-zinc-200">หัวข้อส่งรูป (Collections)</h3>
+                            <span class="text-xs text-zinc-500 bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded-full" id="count-collections">0</span>
+                        </div>
+                        
+                        <!-- Collection List -->
+                        <div class="space-y-3 max-h-[380px] overflow-y-auto pr-1" id="collection-list">
+                            <!-- Dynamic Content -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column: Windows 10 File Explorer Mockup -->
+                <div class="lg:col-span-2 space-y-4">
+                    <div class="glass rounded-2xl overflow-hidden border border-zinc-800 flex flex-col h-[520px] shadow-2xl relative">
+                        <!-- Explorer Window Header -->
+                        <div class="bg-zinc-900/90 px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between text-xs text-zinc-400 select-none">
+                            <div class="flex items-center space-x-2">
+                                <i data-lucide="folder" class="w-4 h-4 text-amber-500 fill-amber-500/10"></i>
+                                <span class="font-medium text-zinc-300" id="explorer-window-title">File Explorer - images</span>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <div class="w-3 h-3 rounded-full bg-zinc-800 hover:bg-zinc-700 cursor-pointer"></div>
+                                <div class="w-3 h-3 rounded-full bg-zinc-800 hover:bg-zinc-700 cursor-pointer"></div>
+                                <div class="w-3 h-3 rounded-full bg-rose-500/80 hover:bg-rose-600 cursor-pointer"></div>
+                            </div>
+                        </div>
+
+                        <!-- Explorer Toolbar -->
+                        <div class="bg-zinc-900/40 p-2.5 border-b border-zinc-800/80 flex flex-wrap gap-2 items-center justify-between">
+                            <div class="flex items-center space-x-1.5">
+                                <!-- Navigation Buttons -->
+                                <button onclick="navigateUp()" id="btn-nav-up" class="p-1.5 hover:bg-zinc-800 text-zinc-400 rounded disabled:opacity-40 disabled:hover:bg-transparent transition-colors" title="ขึ้นบนหนึ่งระดับ">
+                                    <i data-lucide="arrow-up" class="w-4 h-4"></i>
+                                </button>
+                                <button onclick="navigateRoot()" class="p-1.5 hover:bg-zinc-800 text-zinc-400 rounded transition-colors" title="กลับไปหน้าหลัก (Root)">
+                                    <i data-lucide="home" class="w-4 h-4"></i>
+                                </button>
+                                <div class="h-5 w-[1px] bg-zinc-800 mx-1.5"></div>
+                                <!-- Action Buttons -->
+                                <button onclick="downloadSelectedZip()" class="flex items-center space-x-1.5 px-3 py-1.5 rounded bg-brand-600 hover:bg-brand-700 text-xs font-semibold text-white shadow-lg shadow-brand-500/10 transition-all">
+                                    <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                                    <span>ดาวน์โหลด ZIP</span>
+                                </button>
+                                <button onclick="deleteSelectedSubmissions()" id="btn-delete-selected" class="flex items-center space-x-1.5 px-3 py-1.5 rounded bg-rose-950/40 border border-rose-900/50 hover:bg-rose-900/40 text-xs font-semibold text-rose-300 transition-colors disabled:opacity-40 disabled:hover:bg-rose-950/40" disabled>
+                                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                    <span>ลบไฟล์ที่เลือก</span>
+                                </button>
+                            </div>
+
+                            <!-- Search Bar -->
+                            <div class="relative w-full sm:w-48">
+                                <input type="text" id="explorer-search" oninput="handleSearchInput()" placeholder="ค้นหาในโฟลเดอร์..." class="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 pl-8 text-xs text-zinc-300 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-brand-500">
+                                <div class="absolute inset-y-0 left-2.5 flex items-center pointer-events-none text-zinc-500">
+                                    <i data-lucide="search" class="w-3.5 h-3.5"></i>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Address/Path Bar -->
+                        <div class="bg-zinc-950/20 px-3.5 py-2 border-b border-zinc-850 flex items-center space-x-2 text-xs">
+                            <span class="text-zinc-500 select-none">ที่อยู่:</span>
+                            <div class="flex-1 bg-zinc-950/90 border border-zinc-800/80 rounded px-2.5 py-1.5 flex items-center space-x-1 text-zinc-400 font-mono text-[11px] select-all overflow-x-auto" id="explorer-breadcrumbs">
+                                <!-- Clickable crumbs path -->
+                            </div>
+                        </div>
+
+                        <!-- Explorer Main Pane -->
+                        <div class="flex-1 flex overflow-hidden">
+                            <!-- Sidebar directory tree -->
+                            <div class="w-48 border-r border-zinc-850 bg-zinc-900/10 p-3.5 overflow-y-auto hidden sm:block select-none text-xs text-zinc-400 space-y-2">
+                                <div class="flex items-center space-x-1.5 py-1 px-1.5 hover:bg-zinc-800/60 rounded cursor-pointer text-zinc-200" onclick="navigateRoot()">
+                                    <i data-lucide="hard-drive" class="w-4 h-4 text-brand-500"></i>
+                                    <span class="font-semibold">images (Storage)</span>
+                                </div>
+                                <div class="pl-3.5 space-y-1.5" id="explorer-sidebar-tree">
+                                    <!-- Dynamic tree nodes -->
+                                </div>
+                            </div>
+
+                            <!-- Main content folder view grid -->
+                            <div class="flex-1 p-4 overflow-y-auto bg-zinc-950/30 min-h-[250px]" id="explorer-grid">
+                                <!-- Dynamic folders/files grid layout -->
+                            </div>
+                        </div>
+
+                        <!-- Explorer Window Status bar -->
+                        <div class="bg-zinc-900/90 border-t border-zinc-850 px-4 py-1.5 flex items-center justify-between text-[10px] text-zinc-500 select-none font-mono">
+                            <div id="explorer-status-count">0 รายการ</div>
+                            <div id="explorer-status-selected" class="text-brand-400 font-semibold"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Modal: Add Collection -->
+    <div id="modal-add-collection" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm hidden">
+        <div class="glass max-w-sm w-full mx-4 rounded-2xl p-6 space-y-4 border border-zinc-800 shadow-2xl relative">
+            <button onclick="closeAddCollectionModal()" class="absolute top-4 right-4 text-zinc-500 hover:text-white">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+            <div class="space-y-1">
+                <h3 class="text-lg font-bold text-white">เพิ่มหัวข้อการส่งรูปภาพ</h3>
+                <p class="text-xs text-zinc-400">กำหนดหัวข้อ เช่น ชื่อวิชา ชื่อหัวข้อกิจกรรม เพื่อนำไปจัดหมวดหมู่โฟลเดอร์</p>
+            </div>
+            <form onsubmit="handleAddCollectionSubmit(event)" class="space-y-4">
+                <div class="space-y-2">
+                    <label for="new-col-name" class="block text-xs font-medium text-zinc-300">ชื่อหัวข้อ (ภาษาอังกฤษ/ภาษาไทย)</label>
+                    <input type="text" id="new-col-name" required placeholder="เช่น ewe, camp-2026" class="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3.5 py-2.5 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-brand-500">
+                </div>
+                <div class="flex items-center space-x-2 py-1">
+                    <input type="checkbox" id="new-col-active" checked class="rounded border-zinc-700 bg-zinc-900 text-brand-600 focus:ring-brand-500">
+                    <label for="new-col-active" class="text-xs text-zinc-300">เปิดรับรูปภาพทันที (is_active)</label>
+                </div>
+                <div class="flex space-x-2 pt-2">
+                    <button type="button" onclick="closeAddCollectionModal()" class="w-1/2 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 py-2.5 rounded-xl text-xs font-semibold">ยกเลิก</button>
+                    <button type="submit" class="w-1/2 bg-brand-600 hover:bg-brand-700 text-white py-2.5 rounded-xl text-xs font-semibold">สร้างหัวข้อ</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Download ZIP Options -->
+    <div id="modal-download-zip" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm hidden">
+        <div class="glass max-w-sm w-full mx-4 rounded-2xl p-6 space-y-4 border border-zinc-800 shadow-2xl relative">
+            <button onclick="closeDownloadZipModal()" class="absolute top-4 right-4 text-zinc-500 hover:text-white">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+            <div class="space-y-1">
+                <h3 class="text-lg font-bold text-white flex items-center">
+                    <i data-lucide="folder-archive" class="w-5 h-5 mr-2 text-brand-500"></i>
+                    ดาวน์โหลด ZIP
+                </h3>
+                <p class="text-xs text-zinc-400">เลือกขอบเขตข้อมูลที่ต้องการบีบอัดไฟล์ดาวน์โหลด</p>
+            </div>
+            
+            <div class="space-y-3 py-2">
+                <!-- Option 1: Selected Folder -->
+                <label id="zip-opt-folder-label" class="relative flex items-start p-3 rounded-xl border border-zinc-800 bg-zinc-900/40 cursor-pointer hover:bg-zinc-800/40 transition-all select-none">
+                    <input type="radio" name="zip-scope" value="folder" checked class="mt-1 border-zinc-700 bg-zinc-900 text-brand-600 focus:ring-brand-500">
+                    <div class="ml-3">
+                        <span class="block text-xs font-bold text-white" id="zip-opt-folder-title">ดาวน์โหลดเฉพาะไดรฟ์ปัจจุบัน</span>
+                        <span class="block text-[10px] text-zinc-500 mt-0.5" id="zip-opt-folder-desc">บีบอัดไฟล์เฉพาะในพาธโฟลเดอร์นี้</span>
+                    </div>
+                </label>
+                
+                <!-- Option 2: All items -->
+                <label class="relative flex items-start p-3 rounded-xl border border-zinc-800 bg-zinc-900/40 cursor-pointer hover:bg-zinc-800/40 transition-all select-none">
+                    <input type="radio" name="zip-scope" value="all" class="mt-1 border-zinc-700 bg-zinc-900 text-brand-600 focus:ring-brand-500">
+                    <div class="ml-3">
+                        <span class="block text-xs font-bold text-white">ดาวน์โหลดไฟล์ทั้งหมดในระบบ (All Path)</span>
+                        <span class="block text-[10px] text-zinc-500 mt-0.5">บีบอัดไฟล์ทั้งหมดแยกโฟลเดอร์โครงสร้างตามจริง</span>
+                    </div>
+                </label>
+            </div>
+
+            <!-- Conversion Notice -->
+            <div class="p-3 bg-brand-500/5 border border-brand-500/10 rounded-xl flex items-start space-x-2">
+                <i data-lucide="info" class="w-4 h-4 text-brand-400 mt-0.5 shrink-0"></i>
+                <p class="text-[10px] text-zinc-400 leading-normal">
+                    <strong>หมายเหตุ:</strong> ระบบจะแปลงรูปภาพทั้งหมด (เช่นไฟล์ AVIF/WebP) ให้เป็นฟอร์แมต **JPEG (.jpg)** โดยอัตโนมัติขณะดาวน์โหลดเพื่อความเข้ากันได้
+                </p>
+            </div>
+
+            <div class="flex space-x-2 pt-1">
+                <button type="button" onclick="closeDownloadZipModal()" class="w-1/2 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 py-2.5 rounded-xl text-xs font-semibold">ยกเลิก</button>
+                <button type="button" onclick="executeZipDownload()" class="w-1/2 bg-brand-600 hover:bg-brand-700 text-white py-2.5 rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5">
+                    <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                    <span>เริ่มดาวน์โหลด</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alert / Toast Component -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2"></div>
+
+    <!-- Background script simulating Supabase + Local Logic -->
+    <script>
+        // --- DATA SCHEMA INITIALIZATION (localStorage) ---
+        let collections = JSON.parse(localStorage.getItem('mock_collections')) || [
+            { id: "col-1", name: "ewe", is_active: true },
+            { id: "col-2", name: "camp-science", is_active: true },
+            { id: "col-3", name: "design-workshop", is_active: false }
+        ];
+
+        let submissions = JSON.parse(localStorage.getItem('mock_submissions')) || [
+            { 
+                id: "sub-1", 
+                collection_id: "col-1", 
+                collection_name: "ewe",
+                name: "สมชาย ใจดี", 
+                group_name: "กลุ่ม 1", 
+                category: "Screenshot", 
+                file_path: "ewe/กลุ่ม 1/สมชาย ใจดี.avif",
+                file_size: 78 * 1024, // 78 KB
+                original_size: 3200 * 1024, // 3.2 MB
+                img_data: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%236366f1'/><text x='50' y='55' fill='white' font-family='Prompt' font-size='10' text-anchor='middle'>ewe / สมชาย</text></svg>"
+            },
+            { 
+                id: "sub-2", 
+                collection_id: "col-1", 
+                collection_name: "ewe",
+                name: "สมชาย ใจดี (1)", 
+                group_name: "กลุ่ม 1", 
+                category: "Screenshot", 
+                file_path: "ewe/กลุ่ม 1/สมชาย ใจดี (1).avif",
+                file_size: 65 * 1024, // 65 KB
+                original_size: 4500 * 1024, // 4.5 MB
+                img_data: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%233b82f6'/><text x='50' y='55' fill='white' font-family='Prompt' font-size='10' text-anchor='middle'>ewe / สมชาย (1)</text></svg>"
+            },
+            { 
+                id: "sub-3", 
+                collection_id: "col-2", 
+                collection_name: "camp-science",
+                name: "วิภาวัลย์ รักเรียน", 
+                group_name: "กลุ่มวิทยาศาสตร์ 4", 
+                category: "Certificate", 
+                file_path: "camp-science/กลุ่มวิทยาศาสตร์ 4/วิภาวัลย์ รักเรียน.avif",
+                file_size: 92 * 1024, // 92 KB
+                original_size: 1500 * 1024, // 1.5 MB
+                img_data: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%2310b981'/><text x='50' y='55' fill='white' font-family='Prompt' font-size='10' text-anchor='middle'>Camp / วิภาวัลย์</text></svg>"
+            }
+        ];
+
+        // Currently uploaded file tracking
+        let currentUploadedFile = null;
+        let compressedFileBlob = null;
+        let compressedFileBase64 = null;
+
+        // Save states to localstorage
+        function saveData() {
+            localStorage.setItem('mock_collections', JSON.stringify(collections));
+            localStorage.setItem('mock_submissions', JSON.stringify(submissions));
+            updateStats();
+        }
+
+        // --- NAVIGATION & VIEW LOGIC ---
+        function switchView(view) {
+            const portalBtn = document.getElementById('btn-portal');
+            const adminBtn = document.getElementById('btn-admin');
+            const portalView = document.getElementById('view-portal');
+            const adminView = document.getElementById('view-admin');
+
+            if (view === 'portal') {
+                portalBtn.className = "flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-300 bg-brand-600 text-white shadow-md shadow-brand-600/10";
+                adminBtn.className = "flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-300 text-zinc-400 hover:text-zinc-200";
+                portalView.classList.remove('hidden');
+                adminView.classList.add('hidden');
+            } else {
+                adminBtn.className = "flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-300 bg-brand-600 text-white shadow-md shadow-brand-600/10";
+                portalBtn.className = "flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-300 text-zinc-400 hover:text-zinc-200";
+                portalView.classList.add('hidden');
+                adminView.classList.remove('hidden');
+                renderAdminDashboard();
+            }
+        }
+
+        // --- TOAST NOTIFICATIONS ---
+        function showToast(title, message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            
+            const icons = {
+                success: '<i data-lucide="circle-check" class="w-5 h-5 text-emerald-400"></i>',
+                error: '<i data-lucide="circle-alert" class="w-5 h-5 text-rose-500"></i>',
+                info: '<i data-lucide="info" class="w-5 h-5 text-brand-400"></i>'
+            };
+
+            toast.className = `glass p-4 rounded-xl border-l-4 shadow-xl flex items-start space-x-3 transition-all duration-300 translate-x-10 opacity-0 ${
+                type === 'success' ? 'border-l-emerald-500' : type === 'error' ? 'border-l-rose-500' : 'border-l-brand-500'
+            }`;
+            
+            toast.innerHTML = `
+                <div class="mt-0.5">${icons[type]}</div>
+                <div class="flex-1 space-y-0.5">
+                    <p class="text-xs font-bold text-white">${title}</p>
+                    <p class="text-[11px] text-zinc-400">${message}</p>
+                </div>
+            `;
+            
+            container.appendChild(toast);
+            lucide.createIcons();
+
+            // Animate In
+            setTimeout(() => {
+                toast.classList.remove('translate-x-10', 'opacity-0');
+            }, 10);
+
+            // Auto Dismiss
+            setTimeout(() => {
+                toast.classList.add('translate-x-10', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        // --- COMPRESSION & FILE UPLOAD LOGIC ---
+        function handleFileDrop(e) {
+            e.preventDefault();
+            document.getElementById('dropzone').classList.remove('border-brand-500', 'bg-zinc-800/20');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                processUploadedFile(files[0]);
+            }
+        }
+
+        function handleFileSelect(e) {
+            const files = e.target.files;
+            if (files.length > 0) {
+                processUploadedFile(files[0]);
+            }
+        }
+
+        async function processUploadedFile(file) {
+            if (!file.type.startsWith('image/')) {
+                showToast('ไฟล์ไม่รองรับ', 'กรุณาอัปโหลดเฉพาะไฟล์รูปภาพเท่านั้น', 'error');
+                return;
+            }
+            
+            // Limit to 15MB
+            if (file.size > 15 * 1024 * 1024) {
+                showToast('ไฟล์ใหญ่เกินไป', 'ขนาดไฟล์สูงสุดไม่เกิน 15MB', 'error');
+                return;
+            }
+
+            currentUploadedFile = file;
+
+            // Show Loading state
+            const uploadPrompt = document.getElementById('upload-prompt');
+            const uploadPreview = document.getElementById('upload-preview');
+            const previewImg = document.getElementById('preview-image');
+            
+            uploadPrompt.classList.add('hidden');
+            uploadPreview.classList.remove('hidden');
+            
+            // Set temporary local URL for preview
+            previewImg.src = URL.createObjectURL(file);
+
+            // Compress UI
+            const statusLabel = document.getElementById('compression-status');
+            const progressBar = document.getElementById('compress-progress-bar');
+
+            statusLabel.innerHTML = `<i data-lucide="loader" class="w-3.5 h-3.5 mr-1 animate-spin text-brand-500"></i> กำลังย่อขนาดภาพ...`;
+            statusLabel.className = "text-brand-400 font-medium flex items-center";
+            progressBar.style.width = "30%";
+            lucide.createIcons();
+
+            // Run compression using actual browser-image-compression
+            try {
+                const options = {
+                    maxSizeMB: 0.1,              // Max size 100KB (0.1 MB)
+                    maxWidthOrHeight: 1024,      // Max resolution width/height
+                    useWebWorker: true,
+                    fileType: 'image/avif'       // Output format AVIF
+                };
+
+                // Add delay simulation for visuals
+                await new Promise(resolve => setTimeout(resolve, 800));
+                progressBar.style.width = "70%";
+
+                const compressedFile = await imageCompression(file, options);
+                
+                progressBar.style.width = "100%";
+                statusLabel.innerHTML = `<i data-lucide="circle-check" class="w-3.5 h-3.5 mr-1"></i> ย่อขนาดสำเร็จ (AVIF)`;
+                statusLabel.className = "text-emerald-500 font-medium flex items-center";
+                lucide.createIcons();
+
+                compressedFileBlob = compressedFile;
+
+                // Convert compressed blob to base64 for visualization/local storage mockup
+                const reader = new FileReader();
+                reader.readAsDataURL(compressedFile);
+                reader.onloadend = function() {
+                    compressedFileBase64 = reader.result;
+                };
+
+            } catch (error) {
+                console.error("Compression error: ", error);
+                statusLabel.innerHTML = `<i data-lucide="circle-alert" class="w-3.5 h-3.5 mr-1"></i> ย่อล้มเหลว (ใช้ไฟล์ต้นฉบับ)`;
+                statusLabel.className = "text-rose-500 font-medium flex items-center";
+                lucide.createIcons();
+                
+                compressedFileBlob = file;
+                
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onloadend = function() {
+                    compressedFileBase64 = reader.result;
+                };
+            }
+        }
+
+        function resetFile(event) {
+            if (event) event.stopPropagation();
+            currentUploadedFile = null;
+            compressedFileBlob = null;
+            compressedFileBase64 = null;
+            
+            document.getElementById('file-input').value = "";
+            document.getElementById('upload-prompt').classList.remove('hidden');
+            document.getElementById('upload-preview').classList.add('hidden');
+        }
+
+        // --- SUBMISSION FORM SUBMIT ---
+        function handleFormSubmit(e) {
+            e.preventDefault();
+
+            const selectedRadio = document.querySelector('input[name="category"]:checked');
+            const colId = selectedRadio ? selectedRadio.value : null;
+            const subName = document.getElementById('sub-name').value.trim();
+            const subGroup = document.getElementById('sub-group').value.trim();
+
+            if (!colId || !subName || !subGroup || !compressedFileBlob) {
+                showToast('กรอกข้อมูลไม่ครบ', 'กรุณากรอกข้อมูลและเลือกภาพที่ต้องการส่ง', 'error');
+                return;
+            }
+
+            const colObj = collections.find(c => c.id === colId);
+            const category = colObj ? colObj.name : '';
+            if (!colObj.is_active) {
+                showToast('หัวข้อถูกปิดรับแล้ว', 'ไม่สามารถส่งภาพในหัวข้อนี้ได้ เนื่องจากปิดรับการส่งแล้ว', 'error');
+                return;
+            }
+
+            // Logic logic to avoid server-side collision
+            // Check for duplication of the name in the same group and collection
+            let finalName = subName;
+            let counter = 1;
+            
+            // Check matches and generate suffix like "Name (1)", "Name (2)" if collides
+            while (submissions.some(s => s.collection_id === colId && s.group_name === subGroup && s.name.toLowerCase() === finalName.toLowerCase())) {
+                finalName = `${subName} (${counter})`;
+                counter++;
+            }
+
+            // Path pattern in Storage: collection_name/group_name/finalName.avif
+            const fileExtension = currentUploadedFile.type.split('/')[1] === 'gif' ? 'gif' : 'avif';
+            const filePath = `${colObj.name}/${subGroup}/${finalName}.${fileExtension}`;
+
+            const newSubmission = {
+                id: 'sub-' + Date.now(),
+                collection_id: colId,
+                collection_name: colObj.name,
+                name: finalName,
+                group_name: subGroup,
+                category: category,
+                file_path: filePath,
+                file_size: compressedFileBlob.size,
+                original_size: currentUploadedFile.size,
+                img_data: compressedFileBase64 // base64 preview representation
+            };
+
+            submissions.push(newSubmission);
+            saveData();
+
+            showToast('ส่งรูปสำเร็จ!', `อัปโหลดไฟล์ไปที่: ${filePath}`, 'success');
+
+            // Reset form
+            document.getElementById('sub-name').value = "";
+            document.getElementById('sub-group').value = "";
+            resetFile();
+        }
+
+        // --- ADMIN: RENDERING & DASHBOARD LOGIC ---
+        function renderAdminDashboard() {
+            renderCollectionsList();
+            renderExplorer();
+            updateStats();
+        }
+
+        function updateStats() {
+            document.getElementById('stat-total-submissions').textContent = submissions.length;
+
+            const activeColsCount = collections.filter(c => c.is_active).length;
+            document.getElementById('stat-active-collections').textContent = `${activeColsCount} / ${collections.length}`;
+            
+            // Updates collection count in headers
+            document.getElementById('count-collections').textContent = collections.length;
+        }
+
+        function renderCollectionsList() {
+            const listContainer = document.getElementById('collection-list');
+            listContainer.innerHTML = '';
+
+            collections.forEach(col => {
+                const subCount = submissions.filter(s => s.collection_id === col.id).length;
+                
+                const item = document.createElement('div');
+                item.className = "flex items-center justify-between p-3 rounded-xl border border-zinc-800 bg-zinc-900/30 hover:bg-zinc-800/20 transition-all";
+                
+                item.innerHTML = `
+                    <div class="space-y-1">
+                        <div class="flex items-center space-x-2">
+                            <span class="font-semibold text-xs text-white">/ ${col.name}</span>
+                            <span class="text-[10px] text-zinc-500 bg-zinc-800 px-1.5 py-0.5 rounded">${subCount} ภาพ</span>
+                        </div>
+                        <p class="text-[10px] text-zinc-500">ที่อยู่ใน Bucket: <code class="text-zinc-400">images/${col.name}/</code></p>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <!-- Toggle Switch -->
+                        <button onclick="toggleCollectionActive('${col.id}')" class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                            col.is_active ? 'bg-emerald-500' : 'bg-zinc-700'
+                        }">
+                            <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                col.is_active ? 'translate-x-4' : 'translate-x-0'
+                            }"></span>
+                        </button>
+                        
+                        <!-- Delete Button -->
+                        <button onclick="deleteCollection('${col.id}')" class="p-1.5 text-zinc-500 hover:text-rose-500 transition-colors">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                `;
+                listContainer.appendChild(item);
+            });
+            
+            lucide.createIcons();
+        }
+
+        function toggleCollectionActive(id) {
+            const col = collections.find(c => c.id === id);
+            if (col) {
+                col.is_active = !col.is_active;
+                saveData();
+                renderAdminDashboard();
+                showToast(
+                    col.is_active ? 'เปิดรับผลงานแล้ว' : 'ปิดรับผลงานแล้ว', 
+                    `หัวข้อ /${col.name} สถานะตอนนี้คือ ${col.is_active ? 'เปิด' : 'ปิด'} รับข้อมูล`, 
+                    'info'
+                );
+                // Also update upload portal dropdown list dynamically
+                populateCollectionDropdown();
+            }
+        }
+
+        function deleteCollection(id) {
+            const col = collections.find(c => c.id === id);
+            if (!col) return;
+
+            // Check if there are associated submissions
+            const count = submissions.filter(s => s.collection_id === id).length;
+            if (count > 0) {
+                if (!confirm(`หัวข้อนี้มีรูปภาพจำนวน ${count} รูปภาพที่เชื่อมโยงอยู่ หากลบหัวข้อนี้ ข้อมูลการส่งรูปภาพทั้งหมดจะถูกลบไปด้วย คุณแน่ใจที่จะลบหรือไม่?`)) {
+                    return;
+                }
+                // delete associated submissions
+                submissions = submissions.filter(s => s.collection_id !== id);
+            }
+
+            collections = collections.filter(c => c.id !== id);
+            saveData();
+            renderAdminDashboard();
+            populateCollectionDropdown();
+            showToast('ลบหัวข้อเสร็จสิ้น', `ลบหัวข้อ ${col.name} เรียบร้อย`, 'success');
+        }
+
+        function openAddCollectionModal() {
+            document.getElementById('modal-add-collection').classList.remove('hidden');
+        }
+
+        function closeAddCollectionModal() {
+            document.getElementById('modal-add-collection').classList.add('hidden');
+            document.getElementById('new-col-name').value = '';
+        }
+
+        function handleAddCollectionSubmit(e) {
+            e.preventDefault();
+            const nameInput = document.getElementById('new-col-name').value.trim().toLowerCase();
+            const isActive = document.getElementById('new-col-active').checked;
+
+            // Simple sanitization for folder names (no special chars except dash/underscore)
+            const cleanName = nameInput.replace(/[^a-z0-9-_ก-๙]/g, '-');
+
+            if (collections.some(c => c.name === cleanName)) {
+                showToast('ชื่อหัวข้อซ้ำ', 'มีชื่อหัวข้อนี้ในระบบแล้ว กรุณาใช้ชื่ออื่น', 'error');
+                return;
+            }
+
+            const newCol = {
+                id: 'col-' + Date.now(),
+                name: cleanName,
+                is_active: isActive
+            };
+
+            collections.push(newCol);
+            saveData();
+            closeAddCollectionModal();
+            renderAdminDashboard();
+            populateCollectionDropdown();
+            showToast('เพิ่มหัวข้อเรียบร้อย', `หัวข้อ /${cleanName} ถูกสร้างแล้ว`, 'success');
+        }
+
+        // --- WINDOWS 10 FILE EXPLORER SYSTEM ---
+        let currentExplorerPath = []; // [] is root. [collection_name] is folder inside collection. [collection_name, group_name] is files.
+        let selectedExplorerIds = new Set();
+        let searchExplorerQuery = "";
+
+        function renderExplorer() {
+            const gridContainer = document.getElementById('explorer-grid');
+            const sidebarTree = document.getElementById('explorer-sidebar-tree');
+            const breadcrumbs = document.getElementById('explorer-breadcrumbs');
+            const winTitle = document.getElementById('explorer-window-title');
+            const statusCount = document.getElementById('explorer-status-count');
+            const statusSelected = document.getElementById('explorer-status-selected');
+            const btnNavUp = document.getElementById('btn-nav-up');
+            const btnDeleteSelected = document.getElementById('btn-delete-selected');
+
+            gridContainer.innerHTML = "";
+            
+            // Enable/disable navigation up button
+            btnNavUp.disabled = currentExplorerPath.length === 0;
+
+            // Render breadcrumbs
+            let crumbsHtml = `<span class="hover:underline hover:text-white cursor-pointer" onclick="navigateToPath([])">images</span>`;
+            currentExplorerPath.forEach((part, idx) => {
+                const targetPath = currentExplorerPath.slice(0, idx + 1);
+                crumbsHtml += ` <span class="text-zinc-650 font-sans">/</span> <span class="hover:underline hover:text-white cursor-pointer" onclick='navigateToPath(${JSON.stringify(targetPath)})'>${part}</span>`;
+            });
+            breadcrumbs.innerHTML = crumbsHtml;
+
+            // Render Title
+            const currentDirName = currentExplorerPath.length > 0 ? currentExplorerPath[currentExplorerPath.length - 1] : "images";
+            winTitle.textContent = `File Explorer - ${currentDirName}`;
+
+            // Render Sidebar Directory Tree
+            let sidebarTreeHtml = "";
+            collections.forEach(col => {
+                const isColActiveInPath = currentExplorerPath[0] === col.name;
+                const colSubmissions = submissions.filter(s => s.collection_name === col.name);
+                const uniqueGroups = [...new Set(colSubmissions.map(s => s.group_name))];
+
+                sidebarTreeHtml += `
+                    <div class="space-y-1">
+                        <div onclick="navigateToPath(['${col.name}'])" class="flex items-center space-x-1.5 py-1 px-1.5 hover:bg-zinc-800/60 rounded cursor-pointer ${isColActiveInPath ? 'bg-brand-500/20 text-brand-400 font-semibold' : ''}">
+                            <i data-lucide="${isColActiveInPath ? 'folder-open' : 'folder'}" class="w-3.5 h-3.5 ${col.is_active ? 'text-amber-500' : 'text-zinc-650'}"></i>
+                            <span class="truncate">${col.name}</span>
+                        </div>
+                        ${isColActiveInPath && uniqueGroups.length > 0 ? `
+                            <div class="pl-4 border-l border-zinc-800 space-y-1 mt-0.5">
+                                ${uniqueGroups.map(grp => {
+                                    const isGrpActive = currentExplorerPath[1] === grp;
+                                    return `
+                                        <div onclick="navigateToPath(['${col.name}', '${grp}'])" class="flex items-center space-x-1.5 py-0.5 px-1.5 hover:bg-zinc-800/60 rounded cursor-pointer ${isGrpActive ? 'bg-brand-500/10 text-brand-400 font-medium' : ''}">
+                                            <i data-lucide="folder" class="w-3 h-3 text-zinc-500"></i>
+                                            <span class="truncate">${grp}</span>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            });
+            sidebarTree.innerHTML = sidebarTreeHtml;
+
+            // Fetch and Filter Items for grid
+            let items = [];
+            let itemType = 'folders'; // 'folders' or 'files'
+
+            const searchLower = searchExplorerQuery.toLowerCase();
+
+            if (currentExplorerPath.length === 0) {
+                // Root: show collections as folders
+                itemType = 'folders';
+                items = collections.map(col => {
+                    const colSubmissions = submissions.filter(s => s.collection_id === col.id);
+                    const fileCount = colSubmissions.length;
+                    return {
+                        id: col.id,
+                        name: col.name,
+                        subText: `${fileCount} รูปภาพ`,
+                        icon: 'folder',
+                        colorClass: col.is_active ? 'text-amber-500' : 'text-zinc-650',
+                        onClick: () => navigateToPath([col.name])
+                    };
+                });
+                
+                if (searchLower) {
+                    items = items.filter(it => it.name.toLowerCase().includes(searchLower));
+                }
+            } else if (currentExplorerPath.length === 1) {
+                // Collection folder: show groups as folders
+                itemType = 'folders';
+                const colName = currentExplorerPath[0];
+                const colSubmissions = submissions.filter(s => s.collection_name === colName);
+                const uniqueGroups = [...new Set(colSubmissions.map(s => s.group_name))];
+
+                items = uniqueGroups.map(group => {
+                    const groupFileCount = colSubmissions.filter(s => s.group_name === group).length;
+                    return {
+                        id: `group-${group}`,
+                        name: group,
+                        subText: `${groupFileCount} รูปภาพ`,
+                        icon: 'folder',
+                        colorClass: 'text-amber-500',
+                        onClick: () => navigateToPath([colName, group])
+                    };
+                });
+
+                if (searchLower) {
+                    items = items.filter(it => it.name.toLowerCase().includes(searchLower));
+                }
+            } else if (currentExplorerPath.length === 2) {
+                // Group folder: show submissions as files
+                itemType = 'files';
+                const colName = currentExplorerPath[0];
+                const groupName = currentExplorerPath[1];
+
+                let groupSubmissions = submissions.filter(s => s.collection_name === colName && s.group_name === groupName);
+
+                if (searchLower) {
+                    groupSubmissions = groupSubmissions.filter(s => s.name.toLowerCase().includes(searchLower));
+                }
+
+                items = groupSubmissions.map(sub => {
+                    const isSelected = selectedExplorerIds.has(sub.id);
+                    return {
+                        id: sub.id,
+                        name: sub.name,
+                        subText: formatBytes(sub.file_size),
+                        file_path: sub.file_path,
+                        original_size: sub.original_size,
+                        img_data: sub.img_data,
+                        isSelected: isSelected,
+                        onClick: (e) => toggleSelectSubmission(sub.id, e)
+                    };
+                });
+                
+                // Store in global array for the lightbox viewer
+                currentFolderFiles = [...groupSubmissions.map(sub => ({
+                    id: sub.id,
+                    name: sub.name,
+                    img_data: sub.img_data,
+                    subText: formatBytes(sub.file_size),
+                    original_size: sub.original_size,
+                    file_path: sub.file_path
+                }))];
+            }
+
+            // Render Grid Content
+            if (items.length === 0) {
+                gridContainer.className = "flex items-center justify-center h-full min-h-[300px]";
+                gridContainer.innerHTML = `
+                    <div class="text-center text-zinc-650 space-y-2 select-none">
+                        <i data-lucide="folder-open" class="w-12 h-12 mx-auto text-zinc-800"></i>
+                        <p class="text-xs">โฟลเดอร์นี้ว่างเปล่า</p>
+                    </div>
+                `;
+            } else {
+                if (itemType === 'folders') {
+                    gridContainer.className = "explorer-grid-layout flex-1 p-4 overflow-y-auto bg-zinc-950/30 min-h-[250px]";
+                    items.forEach(it => {
+                        const card = document.createElement('div');
+                        card.ondblclick = it.onClick;
+                        card.onclick = it.onClick; // Supports mobile/click fallback navigation
+                        card.className = "flex flex-col items-center p-4 rounded-xl border border-zinc-900 bg-zinc-900/30 hover:bg-zinc-850/20 hover:border-zinc-800 cursor-pointer select-none text-center transition-all group relative";
+                        card.innerHTML = `
+                            <!-- Hover download button to zip download this folder/drive directly -->
+                            <button onclick="downloadFolderZipDirect('${it.name}', event)" class="absolute top-2 right-2 p-1.5 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-850/80 rounded bg-zinc-950/40 opacity-0 group-hover:opacity-100 transition-all z-20" title="ดาวน์โหลดไดรฟ์นี้ (.zip)">
+                                <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                            </button>
+                            <div class="p-2 relative">
+                                <i data-lucide="${it.icon}" class="w-12 h-12 ${it.colorClass} fill-current/10 transition-transform group-hover:scale-105"></i>
+                            </div>
+                            <span class="text-xs font-semibold text-zinc-200 mt-2 truncate w-full group-hover:text-white" title="${it.name}">${it.name}</span>
+                            <span class="text-[10px] text-zinc-500 mt-0.5">${it.subText}</span>
+                        `;
+                        gridContainer.appendChild(card);
+                    });
+                } else {
+                    // Files grid
+                    gridContainer.className = "explorer-grid-layout flex-1 p-4 overflow-y-auto bg-zinc-950/30 min-h-[250px]";
+                    items.forEach(it => {
+                        const card = document.createElement('div');
+                        card.onclick = (e) => openImageViewer(it.id, e);
+                        card.className = `flex flex-col rounded-xl overflow-hidden border cursor-pointer select-none transition-all group relative ${
+                            it.isSelected 
+                            ? 'border-brand-500 bg-brand-500/10' 
+                            : 'border-zinc-900 bg-zinc-900/30 hover:bg-zinc-850/20 hover:border-zinc-800'
+                        }`;
+                        
+                        card.innerHTML = `
+                            <!-- Image Thumbnail Area -->
+                            <div class="h-24 bg-zinc-950/80 flex items-center justify-center overflow-hidden border-b border-zinc-900/80 relative">
+                                <img src="${it.img_data}" class="object-cover w-full h-full group-hover:scale-105 transition-transform duration-300" alt="Thumbnail">
+                                
+                                <!-- Checkbox container -->
+                                <div class="absolute top-2 left-2 z-10 p-1 rounded hover:bg-zinc-900/80" onclick="toggleSelectSubmission('${it.id}', event)">
+                                    <input type="checkbox" ${it.isSelected ? 'checked' : ''} class="rounded border-zinc-700 bg-zinc-900 text-brand-600 focus:ring-brand-500 pointer-events-none w-4 h-4 shadow">
+                                </div>
+                                
+                                <!-- Size tag -->
+                                <span class="absolute bottom-1 right-1.5 text-[9px] bg-zinc-950/70 text-zinc-400 px-1 py-0.5 rounded font-mono">${it.subText}</span>
+                            </div>
+                            
+                            <!-- Metadata Area -->
+                            <div class="p-2 text-left space-y-0.5">
+                                <p class="text-[10px] font-semibold text-zinc-200 truncate group-hover:text-white" title="${it.name}">${it.name}.avif</p>
+                                <div class="flex items-center justify-between text-[9px] text-zinc-500">
+                                    <span class="truncate">ดิบ: ${formatBytes(it.original_size)}</span>
+                                    <button onclick="downloadSingleImage('${it.id}'); event.stopPropagation();" class="text-zinc-500 hover:text-white" title="ดาวน์โหลด">
+                                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                        gridContainer.appendChild(card);
+                    });
+                }
+            }
+
+            // Update Status bar
+            const totalCount = items.length;
+            statusCount.textContent = `${totalCount} รายการ`;
+            
+            if (selectedExplorerIds.size > 0) {
+                statusSelected.textContent = `เลือกแล้ว ${selectedExplorerIds.size} รายการ`;
+                btnDeleteSelected.disabled = false;
+            } else {
+                statusSelected.textContent = "";
+                btnDeleteSelected.disabled = true;
+            }
+
+            lucide.createIcons();
+        }
+
+        function navigateToPath(pathArray) {
+            currentExplorerPath = pathArray;
+            selectedExplorerIds.clear();
+            document.getElementById('explorer-search').value = "";
+            searchExplorerQuery = "";
+            renderExplorer();
+        }
+
+        function navigateUp() {
+            if (currentExplorerPath.length > 0) {
+                currentExplorerPath.pop();
+                selectedExplorerIds.clear();
+                document.getElementById('explorer-search').value = "";
+                searchExplorerQuery = "";
+                renderExplorer();
+            }
+        }
+
+        function navigateRoot() {
+            navigateToPath([]);
+        }
+
+        function toggleSelectSubmission(id, event) {
+            if (event) event.stopPropagation();
+            if (selectedExplorerIds.has(id)) {
+                selectedExplorerIds.delete(id);
+            } else {
+                selectedExplorerIds.add(id);
+            }
+            renderExplorer();
+        }
+
+        function handleSearchInput() {
+            searchExplorerQuery = document.getElementById('explorer-search').value;
+            renderExplorer();
+        }
+
+        function deleteSelectedSubmissions() {
+            if (selectedExplorerIds.size === 0) return;
+
+            if (!confirm(`คุณแน่ใจที่จะลบรูปภาพที่เลือกจำนวน ${selectedExplorerIds.size} รูปภาพหรือไม่? (นี่จะทำการลบจำลองใน Storage และ Database)`)) {
+                return;
+            }
+
+            // Remove selected IDs from submissions array
+            submissions = submissions.filter(sub => !selectedExplorerIds.has(sub.id));
+            selectedExplorerIds.clear();
+            saveData();
+            
+            renderAdminDashboard();
+            showToast('ลบข้อมูลเสร็จสิ้น', 'ลบรูปภาพที่เลือกสำเร็จแล้ว', 'success');
+        }
+
+        // --- LIGHTBOX IMAGE VIEWER SYSTEM ---
+        let currentFolderFiles = []; // Keeps track of files in the current folder view
+        let currentViewerIndex = -1;
+
+        function openImageViewer(id, event) {
+            if (event) event.stopPropagation();
+            
+            currentViewerIndex = currentFolderFiles.findIndex(f => f.id === id);
+            if (currentViewerIndex === -1) return;
+            
+            updateViewerContent();
+            
+            const modal = document.getElementById('modal-image-viewer');
+            modal.classList.remove('hidden');
+            
+            // Add keyboard navigation listeners
+            document.addEventListener('keydown', handleViewerKeyboardNav);
+        }
+
+        // Student Side Preview Thumbnail Lightbox
+        function openPreviewImageLightbox(event) {
+            if (event) event.stopPropagation();
+            const previewImg = document.getElementById('preview-image');
+            if (!previewImg.src || previewImg.src.endsWith('/index.html') || previewImg.src === window.location.href) return;
+            
+            const viewerImg = document.getElementById('viewer-img');
+            const title = document.getElementById('viewer-title');
+            const metadata = document.getElementById('viewer-metadata');
+            const btnPrev = document.getElementById('btn-viewer-prev');
+            const btnNext = document.getElementById('btn-viewer-next');
+            
+            viewerImg.src = previewImg.src;
+            title.textContent = currentUploadedFile ? currentUploadedFile.name : "ภาพตัวอย่างส่งงาน";
+            metadata.textContent = `ขนาดไฟล์จริง: ${formatBytes(currentUploadedFile ? currentUploadedFile.size : 0)}`;
+            
+            // Hide navigation buttons since it's a single preview
+            btnPrev.disabled = true;
+            btnPrev.style.opacity = "0";
+            btnPrev.style.pointerEvents = "none";
+            
+            btnNext.disabled = true;
+            btnNext.style.opacity = "0";
+            btnNext.style.pointerEvents = "none";
+            
+            const modal = document.getElementById('modal-image-viewer');
+            modal.classList.remove('hidden');
+        }
+
+        function closeImageViewer() {
+            const modal = document.getElementById('modal-image-viewer');
+            modal.classList.add('hidden');
+            document.removeEventListener('keydown', handleViewerKeyboardNav);
+        }
+
+        function updateViewerContent() {
+            if (currentViewerIndex < 0 || currentViewerIndex >= currentFolderFiles.length) return;
+            
+            const file = currentFolderFiles[currentViewerIndex];
+            const img = document.getElementById('viewer-img');
+            const title = document.getElementById('viewer-title');
+            const metadata = document.getElementById('viewer-metadata');
+            const btnPrev = document.getElementById('btn-viewer-prev');
+            const btnNext = document.getElementById('btn-viewer-next');
+            
+            img.src = file.img_data;
+            title.textContent = file.name;
+            metadata.textContent = `พาธ: images/${file.file_path} | ขนาดเดิม: ${formatBytes(file.original_size)}`;
+            
+            // Manage prev/next buttons
+            btnPrev.disabled = currentViewerIndex === 0;
+            btnPrev.style.opacity = currentViewerIndex === 0 ? "0.3" : "1";
+            btnPrev.style.pointerEvents = currentViewerIndex === 0 ? "none" : "auto";
+            
+            btnNext.disabled = currentViewerIndex === currentFolderFiles.length - 1;
+            btnNext.style.opacity = currentViewerIndex === currentFolderFiles.length - 1 ? "0.3" : "1";
+            btnNext.style.pointerEvents = currentViewerIndex === currentFolderFiles.length - 1 ? "none" : "auto";
+        }
+
+        function navigateViewer(direction) {
+            const newIndex = currentViewerIndex + direction;
+            if (newIndex >= 0 && newIndex < currentFolderFiles.length) {
+                currentViewerIndex = newIndex;
+                updateViewerContent();
+            }
+        }
+
+        function handleViewerKeyboardNav(e) {
+            if (e.key === 'ArrowRight') {
+                navigateViewer(1);
+            } else if (e.key === 'ArrowLeft') {
+                navigateViewer(-1);
+            } else if (e.key === 'Escape') {
+                closeImageViewer();
+            }
+        }
+
+        // Direct zip download of a folder/drive from grid click
+        async function downloadFolderZipDirect(folderName, event) {
+            if (event) event.stopPropagation();
+            
+            let itemsToZip = [];
+            let zipNamePrefix = folderName;
+            
+            if (currentExplorerPath.length === 0) {
+                // At Root: folderName is the collection name
+                itemsToZip = submissions.filter(s => s.collection_name === folderName);
+                zipNamePrefix = `drive-${folderName}`;
+            } else if (currentExplorerPath.length === 1) {
+                // Inside Collection: folderName is the group name
+                const colName = currentExplorerPath[0];
+                itemsToZip = submissions.filter(s => s.collection_name === colName && s.group_name === folderName);
+                zipNamePrefix = `${colName}-${folderName}`;
+            }
+            
+            if (itemsToZip.length === 0) {
+                showToast('โฟลเดอร์ว่างเปล่า', 'ไม่มีไฟล์ภายใต้โฟลเดอร์นี้ที่สามารถดาวน์โหลดได้', 'error');
+                return;
+            }
+            
+            showToast('กำลังเตรียมบีบอัดไดรฟ์', `กำลังแปลงรูปภาพในไดรฟ์ ${folderName} จำนวน ${itemsToZip.length} รายการเป็น JPEG...`, 'info');
+            
+            const zip = new JSZip();
+            for (let sub of itemsToZip) {
+                const rawPath = sub.file_path;
+                const baseName = rawPath.substring(0, rawPath.lastIndexOf('.'));
+                const zipPath = `${baseName}.jpg`;
+                
+                try {
+                    const jpegBlob = await convertToJpegBlob(sub.img_data);
+                    zip.file(zipPath, jpegBlob);
+                } catch (e) {
+                    console.error('Failed to convert ' + sub.name + ' to JPEG', e);
+                    try {
+                        const blob = base64ToBlob(sub.img_data);
+                        zip.file(zipPath, blob);
+                    } catch (err) {
+                        zip.file(zipPath + '.txt', `Mock image content for student: ${sub.name}, Group: ${sub.group_name}`);
+                    }
+                }
+            }
+            
+            try {
+                const content = await zip.generateAsync({type: "blob"});
+                const zipName = `picshare-export-${zipNamePrefix}-${Date.now()}.zip`;
+                
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(content);
+                link.download = zipName;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                showToast('ดาวน์โหลดไดรฟ์สำเร็จ!', `ไฟล์ ${zipName} พร้อมใช้งานแล้ว`, 'success');
+            } catch (err) {
+                console.error("ZIP Generation error: ", err);
+                showToast('ดาวน์โหลดล้มเหลว', 'เกิดข้อผิดพลาดในการรวบรวมไฟล์ ZIP', 'error');
+            }
+        }
+
+        // --- ZIP PACKAGING LOGIC (Simulating Bucket structure and downloading ZIP) ---
+        function downloadSelectedZip() {
+            const modal = document.getElementById('modal-download-zip');
+            const optFolderTitle = document.getElementById('zip-opt-folder-title');
+            const optFolderDesc = document.getElementById('zip-opt-folder-desc');
+            
+            const optFolderRadio = document.querySelector('input[name="zip-scope"][value="folder"]');
+            const optAllRadio = document.querySelector('input[name="zip-scope"][value="all"]');
+            
+            optFolderRadio.disabled = false;
+            
+            if (currentExplorerPath.length === 0) {
+                // In Root: option 1 is download currently checked files
+                const selectedCount = selectedExplorerIds.size;
+                if (selectedCount > 0) {
+                    optFolderTitle.textContent = `ดาวน์โหลดเฉพาะไฟล์ที่เลือก (${selectedCount} รายการ)`;
+                    optFolderDesc.textContent = `บีบอัดเฉพาะไฟล์ที่คุณติ๊กเลือกเอาไว้ในระบบ`;
+                    optFolderRadio.checked = true;
+                } else {
+                    optFolderTitle.textContent = `ดาวน์โหลดเฉพาะจุดนำทาง (ไม่มีไฟล์ที่เลือก)`;
+                    optFolderDesc.textContent = `กรุณาติ๊กเลือกไฟล์ หรือดับเบิ้ลคลิกเข้าโฟลเดอร์ก่อน หรือเลือกดาวน์โหลดทั้งหมดแทน`;
+                    optFolderRadio.disabled = true;
+                    optAllRadio.checked = true;
+                }
+            } else if (currentExplorerPath.length === 1) {
+                // Inside collection
+                const colName = currentExplorerPath[0];
+                optFolderTitle.textContent = `ดาวน์โหลดเฉพาะไดรฟ์ /${colName}`;
+                optFolderDesc.textContent = `บีบอัดกลุ่มย่อยและภาพทั้งหมดภายใต้โฟลเดอร์หัวข้อ /${colName}`;
+                optFolderRadio.checked = true;
+            } else if (currentExplorerPath.length === 2) {
+                // Inside group folder
+                const colName = currentExplorerPath[0];
+                const groupName = currentExplorerPath[1];
+                optFolderTitle.textContent = `ดาวน์โหลดเฉพาะกลุ่ม ${groupName} (/${colName})`;
+                optFolderDesc.textContent = `บีบอัดเฉพาะไฟล์ที่นำส่งภายในโฟลเดอร์ ${colName}/${groupName}`;
+                optFolderRadio.checked = true;
+            }
+            
+            modal.classList.remove('hidden');
+        }
+
+        function closeDownloadZipModal() {
+            document.getElementById('modal-download-zip').classList.add('hidden');
+        }
+
+        // Helper to convert base64/url to JPEG blob using canvas
+        function convertToJpegBlob(base64OrUrl) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth || img.width || 800;
+                    canvas.height = img.naturalHeight || img.height || 600;
+                    const ctx = canvas.getContext('2d');
+                    
+                    // Fill white background (JPEGs don't support transparency)
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    
+                    ctx.drawImage(img, 0, 0);
+                    
+                    canvas.toBlob((blob) => {
+                        if (blob) {
+                            resolve(blob);
+                        } else {
+                            reject(new Error("Canvas conversion to JPEG failed"));
+                        }
+                    }, 'image/jpeg', 0.85); // Quality 85%
+                };
+                img.onerror = function() {
+                    reject(new Error("Failed to load image source for JPEG conversion"));
+                };
+                img.src = base64OrUrl;
+            });
+        }
+
+        async function executeZipDownload() {
+            closeDownloadZipModal();
+
+            const scope = document.querySelector('input[name="zip-scope"]:checked').value;
+            let itemsToZip = [];
+
+            if (scope === 'all') {
+                itemsToZip = [...submissions];
+            } else {
+                // Folder scope
+                if (currentExplorerPath.length === 0) {
+                    // Selected submissions in root
+                    itemsToZip = submissions.filter(s => selectedExplorerIds.has(s.id));
+                } else if (currentExplorerPath.length === 1) {
+                    // All submissions in selected collection
+                    const colName = currentExplorerPath[0];
+                    itemsToZip = submissions.filter(s => s.collection_name === colName);
+                } else if (currentExplorerPath.length === 2) {
+                    // All submissions in selected group
+                    const colName = currentExplorerPath[0];
+                    const groupName = currentExplorerPath[1];
+                    itemsToZip = submissions.filter(s => s.collection_name === colName && s.group_name === groupName);
+                }
+            }
+
+            if (itemsToZip.length === 0) {
+                showToast('ไม่พบไฟล์ที่ต้องการบีบอัด', 'ไม่มีรูปภาพตรงตามขอบเขตที่คุณเลือก', 'error');
+                return;
+            }
+
+            showToast('กำลังเตรียมบีบอัด ZIP', `ตรวจพบไฟล์รูปภาพ ${itemsToZip.length} รายการ กำลังแปลงเป็น JPEG และจัดหมวดหมู่...`, 'info');
+
+            const zip = new JSZip();
+
+            // Loop and add files to structure
+            for (let sub of itemsToZip) {
+                // Change extension from .avif/.png/etc to .jpg in Zip path
+                const rawPath = sub.file_path;
+                const baseName = rawPath.substring(0, rawPath.lastIndexOf('.'));
+                const zipPath = `${baseName}.jpg`; // extension is now .jpg!
+
+                try {
+                    // Convert to JPEG blob client side
+                    const jpegBlob = await convertToJpegBlob(sub.img_data);
+                    zip.file(zipPath, jpegBlob);
+                } catch (e) {
+                    console.error('Failed to convert ' + sub.name + ' to JPEG, falling back to base64ToBlob', e);
+                    try {
+                        // Fallback: extract original format but write it as .jpg anyway
+                        const blob = base64ToBlob(sub.img_data);
+                        zip.file(zipPath, blob);
+                    } catch (err) {
+                        zip.file(zipPath + '.txt', `Mock image content for student: ${sub.name}, Group: ${sub.group_name}`);
+                    }
+                }
+            }
+
+            // Generate zip file and download
+            try {
+                const content = await zip.generateAsync({type: "blob"});
+                const zipName = `picshare-export-${scope}-${Date.now()}.zip`;
+                
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(content);
+                link.download = zipName;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                showToast('ดาวน์โหลด ZIP สำเร็จ!', `สร้างไฟล์ ${zipName} และแปลงภาพเป็น JPEG เรียบร้อย`, 'success');
+            } catch (err) {
+                console.error("ZIP Generation error: ", err);
+                showToast('การดาวน์โหลดล้มเหลว', 'เกิดข้อผิดพลาดในการรวบรวมไฟล์ ZIP', 'error');
+            }
+        }
+
+        function downloadSingleImage(id) {
+            const sub = submissions.find(s => s.id === id);
+            if (!sub) return;
+
+            try {
+                const blob = base64ToBlob(sub.img_data);
+                const fileExtension = sub.file_path.split('.').pop();
+                const fileName = `${sub.name}.${fileExtension}`;
+                
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = fileName;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                showToast('ดาวน์โหลดไฟล์สำเร็จ', `ดาวน์โหลดภาพ ${fileName} เรียบร้อย`, 'success');
+            } catch (e) {
+                // If it's a simple standard mock SVG image URL, we can download it directly
+                const link = document.createElement("a");
+                link.href = sub.img_data;
+                const fileExtension = sub.file_path.split('.').pop();
+                link.download = `${sub.name}.${fileExtension}`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                showToast('ดาวน์โหลดสำเร็จ (Mock SVG)', `ดึงข้อมูลภาพสำหรับ ${sub.name}`, 'success');
+            }
+        }
+
+        // Helper to convert base64 (with data uri scheme) to Blob object
+        function base64ToBlob(base64Data) {
+            if (!base64Data.startsWith('data:')) {
+                throw new Error("Invalid base64 uri");
+            }
+            const parts = base64Data.split(';base64,');
+            const contentType = parts[0].split(':')[1];
+            
+            // Handle SVGs that are not base64 encoded but raw URL encoded
+            if (parts.length < 2) {
+                const rawSvg = decodeURIComponent(base64Data.split('data:image/svg+xml;utf8,')[1]);
+                return new Blob([rawSvg], {type: 'image/svg+xml'});
+            }
+            
+            const raw = window.atob(parts[1]);
+            const rawLength = raw.length;
+            const uInt8Array = new Uint8Array(rawLength);
+            
+            for (let i = 0; i < rawLength; ++i) {
+                uInt8Array[i] = raw.charCodeAt(i);
+            }
+            
+            return new Blob([uInt8Array], {type: contentType});
+        }
+
+        // --- GENERAL UTILITY FUNCTIONS ---
+        function populateCollectionDropdown() {
+            const container = document.getElementById('collection-radio-container');
+            container.innerHTML = '';
+            
+            const activeCols = collections.filter(c => c.is_active);
+            if (activeCols.length === 0) {
+                container.innerHTML = `
+                    <div class="col-span-full text-center py-4 text-xs text-zinc-500 border border-zinc-800 rounded-xl bg-zinc-900/20">
+                        ไม่มีหัวข้อที่เปิดรับในขณะนี้
+                    </div>
+                `;
+                updateCollectionStatus(null);
+                return;
+            }
+
+            activeCols.forEach((col, idx) => {
+                const label = document.createElement('label');
+                label.className = "relative flex items-center justify-center p-3 rounded-xl border border-zinc-800 bg-zinc-900/40 cursor-pointer text-xs sm:text-sm font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40 transition-all select-none";
+                label.innerHTML = `
+                    <input type="radio" name="category" value="${col.id}" ${idx === 0 ? 'checked' : ''} onchange="updateCollectionStatus('${col.id}')" class="sr-only peer">
+                    <span class="peer-checked:text-brand-500">${col.name}</span>
+                    <div class="absolute inset-0 border-2 border-transparent rounded-xl peer-checked:border-brand-500 pointer-events-none"></div>
+                `;
+                container.appendChild(label);
+            });
+            
+            // Trigger initial selection update
+            if (activeCols.length > 0) {
+                updateCollectionStatus(activeCols[0].id);
+            }
+        }
+
+        function updateCollectionStatus(selectedId) {
+            // (Status indicator removed)
+        }
+
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        // --- PAGE INITIALIZATION ---
+        window.addEventListener('DOMContentLoaded', () => {
+            // Load lucide icons
+            lucide.createIcons();
+            
+            // Populate select dropdown
+            populateCollectionDropdown();
+        });
+    </script>
+</body>
+</html>
