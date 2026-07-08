@@ -70,3 +70,41 @@ CREATE TABLE submissions (
   * **Username**: `admin`
   * **Password**: `1234`
   * คุ้กกี้เซสชัน: อยู่ได้นาน **1 วัน**
+
+---
+
+## ☁️ การตั้งค่าระบบสำรองข้อมูลอัตโนมัติไปยัง Cloudflare R2 (Automatic Cloudflare R2 Backup)
+
+โปรเจกต์นี้รองรับการสำรองข้อมูล (ตาราง/ความสัมพันธ์ของข้อมูล และไฟล์รูปภาพทั้งหมด) ไปยัง Cloudflare R2 โดยสามารถตั้งค่าตัวแปรสภาพแวดล้อมดังนี้:
+
+### 1. กำหนดค่าในไฟล์ `.env`
+ให้เพิ่มค่าด้านล่างนี้ในไฟล์ `.env` ของคุณ:
+
+```env
+CLOUDFLARE_R2_ACCESS_KEY_ID="your-r2-access-key-id"
+CLOUDFLARE_R2_SECRET_ACCESS_KEY="your-r2-secret-access-key"
+CLOUDFLARE_R2_ACCOUNT_ID="your-cloudflare-account-id"
+CLOUDFLARE_R2_BUCKET_NAME="your-r2-bucket-name"
+BACKUP_CRON_TOKEN="your-secure-backup-cron-token"
+```
+
+* **วิธีหาค่าต่าง ๆ บน Cloudflare**:
+  1. เปิด **Cloudflare Dashboard** -> ไปที่เมนู **R2** -> กด **Create bucket** เพื่อสร้าง Bucket ใหม่สำหรับเก็บข้อมูลสำรอง
+  2. ไปที่ **R2** -> คลิก **Manage R2 API Tokens** ด้านขวาของหน้าหลัก
+  3. คลิก **Create API Token** -> เลือกสิทธิ์ของ Token เป็น **Edit** (หรือ Read/Write) -> คลิก **Create Token**
+  4. คัดลอกค่า **Access Key ID**, **Secret Access Key** และ **Account ID** มาใส่ในไฟล์ `.env`
+
+### 2. การสำรองข้อมูลด้วยตนเอง (Manual Backup)
+ในหน้า Admin Dashboard ด้านหลังบ้าน จะมีปุ่ม **"แบ็กอัป R2"** ปรากฏอยู่ แอดมินสามารถกดปุ่มนี้เพื่อทำการดาวน์โหลดไฟล์และคัดลอกข้อมูลทั้งหมดจาก Supabase ขึ้น Cloudflare R2 ได้ทันที พร้อมการแจ้งเตือนแสดงความคืบหน้า
+
+### 3. การสำรองข้อมูลอัตโนมัติ (Automatic Backup via Cron)
+คุณสามารถตั้งค่าระบบส่งคำร้องขออัตโนมัติ (Cron Job) มายัง API endpoint เพื่อสั่งให้ระบบทำการสำรองข้อมูลเองเป็นรอบ ๆ ได้:
+
+* **Endpoint**: `/api/backup?token=YOUR_BACKUP_CRON_TOKEN`
+* **Method**: `GET` หรือ `POST`
+* **ตัวอย่างคำสั่ง curl**:
+  ```sh
+  curl -X GET "https://your-website.com/api/backup?token=your-secure-backup-cron-token"
+  ```
+  *(คุณสามารถผูกบริการ Cron สำเร็จรูปภายนอก เช่น Cloudflare Workers Cron Triggers, cron-job.org หรือ GitHub Actions ได้ตามสะดวก)*
+

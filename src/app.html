@@ -3,7 +3,25 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		
+
+		<!-- 
+			Anti-flash script: รันก่อน render ทุกอย่าง
+			อ่าน localStorage แล้วใส่ class ทันที ไม่ให้พริบ
+		-->
+		<script>
+			(function() {
+				try {
+					if (localStorage.getItem('theme') === 'dark') {
+						document.documentElement.classList.add('dark');
+					} else {
+						document.documentElement.classList.add('light-mode');
+					}
+				} catch (e) {
+					document.documentElement.classList.add('light-mode');
+				}
+			})();
+		</script>
+
 		<!-- Google Fonts -->
 		<link rel="preconnect" href="https://fonts.googleapis.com">
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -11,7 +29,7 @@
 		
 		%sveltekit.head%
 	</head>
-	<body class="h-full flex flex-col font-sans overflow-x-hidden relative bg-grid text-zinc-100" data-sveltekit-preload-data="hover">
+	<body class="h-full flex flex-col font-sans overflow-x-hidden relative bg-grid" style="transition: background-color 0.3s ease, color 0.3s ease;" data-sveltekit-preload-data="hover">
 		<div style="display: contents">%sveltekit.body%</div>
 	</body>
 </html>

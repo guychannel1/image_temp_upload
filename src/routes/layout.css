@@ -1,71 +1,644 @@
 @import 'tailwindcss';
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
     --color-brand-50: #ecfdf5;
     --color-brand-100: #d1fae5;
-    --color-brand-500: #10b981; /* Emerald Green */
+    --color-brand-500: #10b981;
     --color-brand-600: #059669;
     --color-brand-700: #047857;
     --color-brand-900: #064e3b;
 }
 
+/* ============================================================
+   DESIGN TOKENS — CSS Custom Properties
+   ============================================================ */
+:root {
+    --nav-bg:           rgba(9, 9, 11, 0.80);
+    --nav-border:       rgba(63, 63, 70, 0.5);
+    --nav-shadow:       0 1px 24px rgba(0,0,0,0.4);
 
-.glass {
-    background: rgba(24, 24, 27, 0.7);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(63, 63, 70, 0.4);
+    --tab-bg:           rgba(24, 24, 27, 0.7);
+    --tab-border:       rgba(63, 63, 70, 0.5);
+    --tab-text:         #a1a1aa;
+    --tab-text-hover:   #e4e4e7;
+    --tab-active-bg:    #059669;
+    --tab-active-text:  #ffffff;
+
+    --card-bg:          rgba(24, 24, 27, 0.70);
+    --card-border:      rgba(63, 63, 70, 0.4);
+    --body-bg:          #09090b;
+    --text-primary:     #f4f4f5;
+    --text-secondary:   #a1a1aa;
+    --text-muted:       #71717a;
+    --input-bg:         rgba(9,9,11,0.5);
+    --input-border:     rgba(63,63,70,0.8);
+    --divider:          rgba(63, 63, 70, 0.4);
+
+    --pill-track:       rgba(39,39,42,0.8);
+    --pill-thumb:       #3f3f46;
+
+    --admin-btn-bg:     #18181b;
+    --admin-btn-border: #3f3f46;
+    --admin-btn-text:   #e4e4e7;
 }
 
+/* Light mode tokens */
+.light-mode {
+    --nav-bg:           rgba(255, 255, 255, 0.90);
+    --nav-border:       rgba(212, 212, 216, 0.8);
+    --nav-shadow:       0 1px 24px rgba(0,0,0,0.08);
+
+    --tab-bg:           rgba(244, 244, 245, 0.95);
+    --tab-border:       rgba(212, 212, 216, 0.8);
+    --tab-text:         #71717a;
+    --tab-text-hover:   #18181b;
+    --tab-active-bg:    #059669;
+    --tab-active-text:  #ffffff;
+
+    --card-bg:          rgba(255, 255, 255, 0.90);
+    --card-border:      rgba(212, 212, 216, 0.6);
+    --body-bg:          #f4f4f5;
+    --text-primary:     #18181b;
+    --text-secondary:   #52525b;
+    --text-muted:       #71717a;
+    --input-bg:         #ffffff;
+    --input-border:     #d4d4d8;
+    --divider:          rgba(212, 212, 216, 0.6);
+
+    --pill-track:       rgba(228,228,231,0.95);
+    --pill-thumb:       #ffffff;
+
+    --admin-btn-bg:     #ffffff;
+    --admin-btn-border: #d4d4d8;
+    --admin-btn-text:   #3f3f46;
+}
+
+/* ============================================================
+   GRID BACKGROUND
+   ============================================================ */
+.bg-grid {
+    background-color: var(--body-bg);
+    background-image:
+        linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+    transition: background-color 0.3s ease;
+}
+.light-mode.bg-grid,
+.light-mode .bg-grid {
+    background-image:
+        linear-gradient(rgba(0,0,0,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,0,0,0.04) 1px, transparent 1px);
+}
+
+/* ============================================================
+   GLASS CARDS
+   ============================================================ */
+.glass {
+    background: var(--card-bg);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid var(--card-border);
+    transition: background 0.3s ease, border-color 0.3s ease;
+}
+
+/* ============================================================
+   NAVIGATION HEADER
+   ============================================================ */
+.site-header {
+    background: var(--nav-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--nav-border);
+    box-shadow: var(--nav-shadow);
+    transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    margin-bottom: 1.5rem;
+}
+
+/* Logo */
+.logo-area {
+    text-decoration: none;
+    cursor: pointer;
+}
+.logo-icon {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    flex-shrink: 0;
+}
+.logo-area:hover .logo-icon {
+    transform: scale(1.08);
+    box-shadow: 0 4px 16px rgba(5, 150, 105, 0.4);
+}
+.logo-title {
+    color: var(--text-primary);
+    transition: color 0.3s ease;
+}
+
+/* Desktop Nav Tabs */
+.nav-tabs-wrapper {
+    background: var(--tab-bg);
+    border: 1px solid var(--tab-border);
+    transition: background 0.3s ease, border-color 0.3s ease;
+}
+
+.nav-tab {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 1rem;
+    border-radius: 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--tab-text);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: color 0.2s ease, background 0.2s ease;
+    white-space: nowrap;
+}
+.nav-tab:hover {
+    color: var(--tab-text-hover);
+    background: rgba(255,255,255,0.05);
+}
+.light-mode .nav-tab:hover {
+    background: rgba(0,0,0,0.04);
+}
+.nav-tab--active {
+    background: var(--tab-active-bg) !important;
+    color: var(--tab-active-text) !important;
+    box-shadow: 0 2px 8px rgba(5, 150, 105, 0.25);
+}
+
+/* Theme Toggle Pill */
+.theme-pill {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 2px;
+}
+.theme-pill__track {
+    display: flex;
+    align-items: center;
+    width: 44px;
+    height: 24px;
+    border-radius: 999px;
+    background: var(--pill-track);
+    border: 1px solid var(--tab-border);
+    padding: 2px;
+    transition: background 0.3s ease, border-color 0.3s ease;
+    position: relative;
+}
+/* Thumb position driven by CSS only — no Svelte class needed */
+.theme-pill__thumb {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--pill-thumb);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    position: absolute;
+    left: 2px;
+    top: 2px;
+    /* Dark mode: thumb left */
+    transform: translateX(0px);
+    color: #a1a1aa;
+    /* Transition only after JS mounts — prevents slide on reload */
+}
+/* Light mode: thumb right */
+html.light-mode .theme-pill__thumb {
+    transform: translateX(20px);
+    color: #f59e0b;
+    background: #ffffff;
+}
+/* Enable animation only after JS has mounted (data-mounted set in $effect) */
+html[data-mounted] .theme-pill__thumb {
+    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1),
+                background 0.2s ease,
+                color 0.2s ease;
+}
+.theme-pill:hover .theme-pill__track {
+    border-color: #10b981;
+}
+
+/* ============================================================
+   FORM COMPONENTS — Collection buttons, Upload zone, etc.
+   ============================================================ */
+
+/* Collection buttons */
+.collection-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.75rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    color: var(--text-muted);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+    user-select: none;
+}
+.collection-btn:hover {
+    border-color: #10b981;
+    color: var(--text-primary);
+    background: rgba(16, 185, 129, 0.04);
+}
+.collection-btn--active {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.10);
+    color: #10b981;
+    font-weight: 600;
+}
+
+/* Upload drop zone */
+.upload-zone {
+    border: 2px dashed var(--card-border);
+    border-radius: 1rem;
+    padding: 2rem;
+    text-align: center;
+    position: relative;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease;
+    background: transparent;
+}
+.upload-zone:hover {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.03);
+}
+.upload-zone--dragging {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.05);
+}
+
+/* Upload icon wrap */
+.upload-icon-wrap {
+    width: 3rem;
+    height: 3rem;
+    border-radius: 0.75rem;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    transition: color 0.15s ease, border-color 0.15s ease;
+}
+.upload-zone:hover .upload-icon-wrap {
+    color: var(--text-primary);
+    border-color: #10b981;
+}
+
+/* File status box */
+.file-status-box {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+}
+
+/* Hamburger */
+.hamburger-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 0.625rem;
+    background: var(--tab-bg);
+    border: 1px solid var(--tab-border);
+    color: var(--tab-text);
+    cursor: pointer;
+    transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+.hamburger-btn:hover {
+    color: var(--text-primary);
+    border-color: #10b981;
+}
+/* ซ่อนบน desktop — ป้องกัน display:flex ชนะ sm:hidden ของ Tailwind */
+@media (min-width: 640px) {
+    .hamburger-btn { display: none !important; }
+}
+
+/* Mobile Drawer */
+.mobile-drawer {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    backdrop-filter: blur(16px);
+    animation: slideDown 0.18s ease-out;
+}
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.mobile-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.875rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--tab-text);
+    background: none;
+    border: none;
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+    text-align: left;
+}
+.mobile-nav-item:hover {
+    color: var(--text-primary);
+    background: rgba(255,255,255,0.04);
+}
+.light-mode .mobile-nav-item:hover {
+    background: rgba(0,0,0,0.03);
+}
+.mobile-nav-item--active {
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.08);
+}
+.mobile-nav-divider {
+    height: 1px;
+    background: var(--divider);
+    margin: 0 1rem;
+}
+
+/* ============================================================
+   ADMIN BUTTONS
+   ============================================================ */
+.admin-btn {
+    background: var(--admin-btn-bg);
+    border: 1px solid var(--admin-btn-border);
+    color: var(--admin-btn-text);
+    padding: 0.5rem 0.875rem;
+    border-radius: 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.admin-btn:hover {
+    border-color: #10b981;
+    color: var(--text-primary);
+}
+
+/* ============================================================
+   FORM INPUTS — Theme aware
+   ============================================================ */
+.light-mode input[type="text"],
+.light-mode input[type="password"],
+.light-mode input[type="search"] {
+    background: var(--input-bg) !important;
+    border-color: var(--input-border) !important;
+    color: var(--text-primary) !important;
+}
+.light-mode input::placeholder {
+    color: #a1a1aa !important;
+}
+
+/* ============================================================
+   TAILWIND UTILITY OVERRIDES FOR LIGHT MODE
+   ============================================================ */
+
+/* Text */
+.light-mode .text-white:not(.bg-brand-600):not(.bg-brand-700):not(.bg-emerald-600):not(.bg-emerald-700):not(.bg-rose-600):not(.bg-rose-700),
+.light-mode .text-zinc-100,
+.light-mode .text-zinc-200,
+.light-mode .dark-mode-text { color: var(--text-primary) !important; }
+
+/* Keep white text white on buttons and badges with filled colored backgrounds */
+.light-mode .bg-brand-600,
+.light-mode .bg-brand-600 *,
+.light-mode .bg-brand-700,
+.light-mode .bg-brand-700 *,
+.light-mode .bg-emerald-600,
+.light-mode .bg-emerald-600 *,
+.light-mode .bg-emerald-700,
+.light-mode .bg-emerald-700 *,
+.light-mode .bg-rose-600,
+.light-mode .bg-rose-600 *,
+.light-mode .bg-rose-700,
+.light-mode .bg-rose-700 * {
+    color: #ffffff !important;
+}
+
+.light-mode .text-zinc-300,
+.light-mode .text-zinc-400 { color: var(--text-secondary) !important; }
+
+.light-mode .text-zinc-500,
+.light-mode .text-zinc-600 { color: var(--text-muted) !important; }
+
+/* Backgrounds */
+.light-mode .bg-zinc-950,
+.light-mode .bg-zinc-900\/50,
+.light-mode .bg-zinc-900\/40,
+.light-mode .bg-zinc-900\/20,
+.light-mode .bg-zinc-900\/30,
+.light-mode .bg-zinc-900\/10,
+.light-mode .bg-zinc-950\/30,
+.light-mode .bg-zinc-950\/80 {
+    background: rgba(244,244,245,0.6) !important;
+}
+.light-mode .bg-zinc-900\/95,
+.light-mode .bg-zinc-900\/90 {
+    background: rgba(244,244,245,0.98) !important;
+}
+
+/* Borders */
+.light-mode .border-zinc-800,
+.light-mode .border-zinc-800\/80,
+.light-mode .border-zinc-850,
+.light-mode .border-zinc-855,
+.light-mode .border-zinc-900 {
+    border-color: var(--card-border) !important;
+}
+
+/* Muted buttons & tags in dashboard tree */
+.light-mode .bg-zinc-900 {
+    background-color: rgba(0, 0, 0, 0.05) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--divider) !important;
+}
+
+/* Light mode badge and inactive switch overrides */
+.light-mode .bg-zinc-800 {
+    background-color: rgba(0, 0, 0, 0.06) !important;
+    color: var(--text-secondary) !important;
+}
+
+
+
+/* Explorer file area */
+.light-mode .bg-zinc-950\/30 {
+    background: rgba(244,244,245,0.5) !important;
+}
+
+/* Collection + file cards in explorer */
+.light-mode .hover\:bg-zinc-850\/20:hover {
+    background: rgba(0,0,0,0.03) !important;
+}
+
+/* Login card inputs */
+.light-mode .bg-zinc-900\/60 {
+    background: #ffffff !important;
+    border-color: #d4d4d8 !important;
+}
+
+/* Modal backgrounds */
+.light-mode .bg-black\/60,
+.light-mode .bg-black\/80 {
+    background: rgba(0,0,0,0.5) !important;
+}
+
+/* Toast */
+.light-mode .glass.px-4 {
+    background: rgba(255,255,255,0.96) !important;
+    border-color: #e4e4e7 !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.12) !important;
+}
+
+/* Explorer sidebar tree */
+.light-mode .bg-zinc-900\/10 {
+    background: rgba(244,244,245,0.8) !important;
+}
+.light-mode .hover\:bg-zinc-850:hover,
+.light-mode .bg-zinc-850 {
+    background: rgba(0,0,0,0.05) !important;
+}
+
+/* Cinematic lightboxes (lightbox must stay dark-themed for premium feel) */
+.light-mode .fixed.bg-black\/90,
+.light-mode .fixed.bg-black\/90 * {
+    color-scheme: dark !important;
+}
+.light-mode .fixed.bg-black\/90 .border-zinc-800 {
+    border-color: rgba(63, 63, 70, 0.4) !important;
+}
+.light-mode .fixed.bg-black\/90 .bg-zinc-950\/80 {
+    background: rgba(9, 9, 11, 0.85) !important;
+    border-color: rgba(63, 63, 70, 0.4) !important;
+}
+.light-mode .fixed.bg-black\/90 .text-white {
+    color: #ffffff !important;
+}
+.light-mode .fixed.bg-black\/90 .text-zinc-400 {
+    color: #a1a1aa !important;
+}
+.light-mode .fixed.bg-black\/90 .text-zinc-500 {
+    color: #71717a !important;
+}
+
+/* ============================================================
+   SCROLLBAR
+   ============================================================ */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #52525b; }
+
+.light-mode ::-webkit-scrollbar-thumb { background: #d4d4d8; }
+.light-mode ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
+
+/* ============================================================
+   EXPLORER GRID
+   ============================================================ */
 .explorer-grid-layout {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
     gap: 12px;
 }
-/* Custom Scrollbar */
-::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-::-webkit-scrollbar-track {
-    background: #09090b;
-}
-::-webkit-scrollbar-thumb {
-    background: #27272a;
-    border-radius: 9999px;
-}
-::-webkit-scrollbar-thumb:hover {
-    background: #3f3f46;
-}
-/* Shimmer effect */
+
+/* ============================================================
+   ANIMATIONS
+   ============================================================ */
 @keyframes shimmer {
     100% { transform: translateX(100%); }
 }
-.shimmer {
-    position: relative;
-    overflow: hidden;
-}
+.shimmer { position: relative; overflow: hidden; }
 .shimmer::after {
-    position: absolute;
-    top: 0; right: 0; bottom: 0; left: 0;
+    position: absolute; top: 0; right: 0; bottom: 0; left: 0;
     transform: translateX(-100%);
     background-image: linear-gradient(
         90deg,
-        rgba(255, 255, 255, 0) 0%,
-        rgba(255, 255, 255, 0.05) 20%,
-        rgba(255, 255, 255, 0.1) 60%,
-        rgba(255, 255, 255, 0) 100%
+        rgba(255,255,255,0) 0%,
+        rgba(255,255,255,0.05) 20%,
+        rgba(255,255,255,0.1) 60%,
+        rgba(255,255,255,0) 100%
     );
     animation: shimmer 2s infinite;
     content: '';
 }
 
-/* Grid background pattern */
-.bg-grid {
-    background-color: #09090b;
-    background-image:
-        linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
-    background-size: 40px 40px;
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in { animation: fadeIn 0.25s ease-out; }
+
+@keyframes scaleUp {
+    from { opacity: 0; transform: scale(0.95); }
+    to   { opacity: 1; transform: scale(1); }
+}
+.animate-fade-in { animation: fadeIn 0.25s ease-out; }
+.animate-scale-up { animation: scaleUp 0.2s ease-out; }
+
+/* ============================================================
+   ADDITIONAL LIGHT MODE REFINEMENTS
+   ============================================================ */
+
+/* Text hover overrides in light mode to keep text dark on light backgrounds */
+.light-mode .hover\:text-white:hover,
+.light-mode .group:hover .group-hover\:text-white,
+.light-mode .group\/item:hover .group-hover\/item\:text-white {
+    color: var(--text-primary) !important;
+}
+
+/* Sidebar tree & collection item list hover/active text overrides */
+.light-mode .bg-zinc-900\/10 button:hover,
+.light-mode .bg-zinc-900\/10 button:hover *,
+.light-mode .bg-zinc-900\/10 .group\/item:hover button:hover,
+.light-mode .bg-zinc-900\/10 .group\/item:hover * {
+    color: var(--text-primary) !important;
+}
+
+/* Modals & Popups button / badges background overrides */
+.light-mode .glass button.bg-zinc-900,
+.light-mode .glass .bg-zinc-900 {
+    background-color: rgba(0, 0, 0, 0.05) !important;
+    border-color: var(--divider) !important;
+    color: var(--text-primary) !important;
+}
+.light-mode .glass button.bg-zinc-900:hover {
+    background-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+/* Muted buttons & tags in dashboard tree */
+.light-mode .bg-zinc-900 {
+    background-color: rgba(0, 0, 0, 0.05) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--divider) !important;
+}
+
+/* Hover background overrides inside glass containers */
+.light-mode .glass .hover\:bg-zinc-800:hover,
+.light-mode .glass .hover\:bg-zinc-800\/80:hover,
+.light-mode .glass .hover\:bg-zinc-850\/30:hover,
+.light-mode .glass .hover\:bg-zinc-850\/20:hover {
+    background-color: rgba(0, 0, 0, 0.05) !important;
+    color: var(--text-primary) !important;
+}
+
+/* Folder hover download button overlay */
+.light-mode .bg-zinc-950\/40 {
+    background-color: rgba(255, 255, 255, 0.6) !important;
+    border: 1px solid var(--card-border) !important;
+}
+.light-mode .bg-zinc-950\/40:hover {
+    background-color: rgba(0, 0, 0, 0.05) !important;
 }
 
