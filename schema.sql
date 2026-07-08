@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS submissions (
     collection_id UUID NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
     collection_name TEXT NOT NULL,
     name TEXT NOT NULL,
-    group_name TEXT NOT NULL,
+    group_name TEXT,
     file_path TEXT NOT NULL,
     file_size BIGINT NOT NULL,
     original_size BIGINT NOT NULL,
