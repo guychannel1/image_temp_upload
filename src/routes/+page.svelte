@@ -628,8 +628,8 @@
                                     class="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all text-sm">
                             </div>
                             <div class="space-y-2">
-                                <label for="group_name" class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">กลุ่ม<span class="text-rose-500">*</span></label>
-                                <input type="text" id="group_name" name="group_name" bind:value={studentGroup} required placeholder="เช่น กลุ่ม 1"
+                                <label for="group_name" class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">กลุ่ม <span class="text-zinc-600 font-normal normal-case tracking-normal">(ไม่บังคับ)</span></label>
+                                <input type="text" id="group_name" name="group_name" bind:value={studentGroup} placeholder="เช่น กลุ่ม 1"
                                     class="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all text-sm">
                             </div>
                         </div>
@@ -712,7 +712,7 @@
                                                     </span>
                                                 {:else}
                                                     <span class="text-emerald-500 font-medium flex items-center">
-                                                        <CircleCheck class="w-3.5 h-3.5 mr-1" /> บีบอัดลง Vercel (คมชัด 4K)
+                                                        <CircleCheck class="w-3.5 h-3.5 mr-1" /> บีบอัดแล้ว
                                                     </span>
                                                 {/if}
                                             {:else}
@@ -730,7 +730,7 @@
                         </div>
 
                         <!-- Submit Button -->
-                        <button type="submit" disabled={compressionStatus === 'compressing' || !studentName || !studentGroup || !previewUrl}
+                        <button type="submit" disabled={compressionStatus === 'compressing' || !studentName || !previewUrl}
                             class="w-full bg-brand-600 hover:bg-brand-700 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-medium py-3 rounded-xl shadow-lg shadow-brand-500/10 hover:shadow-brand-600/20 transition-all duration-300 flex items-center justify-center space-x-2 text-sm mt-4">
                             <span>บันทึกและส่งรูปภาพ</span>
                         </button>

@@ -247,12 +247,12 @@ export const actions: Actions = {
 
         console.log('📤 [submitForm] Submission received:', { name, group_name, collection_id, isFile, fileSize });
 
-        if (!name || !group_name || !isFile || fileSize === 0) {
+        if (!name || !isFile || fileSize === 0) {
             return fail(400, { success: false, message: 'กรุณากรอกข้อมูลและเลือกไฟล์รูปภาพให้ครบถ้วน' });
         }
 
         const subName = name.trim();
-        const subGroup = group_name.trim();
+        const subGroup = (group_name ?? '').trim();
         let finalName = subName;
 
         let targetCollectionId = collection_id;
@@ -304,7 +304,9 @@ export const actions: Actions = {
                 const originalName = uploadFile.name || 'image.jpg';
                 const fileExtension = originalName.split('.').pop()?.toLowerCase() || 'jpg';
                 const uniqueId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
-                const filePath = `${colName}/${subGroup}/${uniqueId}.${fileExtension}`;
+                const filePath = subGroup
+                    ? `${colName}/${subGroup}/${uniqueId}.${fileExtension}`
+                    : `${colName}/${uniqueId}.${fileExtension}`;
                 const fileBuffer = Buffer.from(await uploadFile.arrayBuffer());
                 const mimeType = uploadFile.type || 'image/jpeg';
 
@@ -375,7 +377,9 @@ export const actions: Actions = {
             const originalName = uploadFile.name || 'image.jpg';
             const fileExtension = originalName.split('.').pop()?.toLowerCase() || 'jpg';
             const uniqueId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
-            const filePath = `${colName}/${subGroup}/${uniqueId}.${fileExtension}`;
+            const filePath = subGroup
+                ? `${colName}/${subGroup}/${uniqueId}.${fileExtension}`
+                : `${colName}/${uniqueId}.${fileExtension}`;
 
             const original_size_str = formData.get('original_size');
             const original_size = original_size_str ? parseInt(original_size_str as string, 10) : fileSize;
