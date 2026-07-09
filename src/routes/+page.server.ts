@@ -562,7 +562,7 @@ export const actions: Actions = {
                     if (rpcResult?.reason === 'person_limit_exceeded') {
                         return fail(429, {
                             success: false,
-                            message: `คุณส่งรูปครบแล้ว (${rpcResult.person_limit ?? 3} รูปต่อนักเรียน) ไม่สามารถส่งเพิ่มได้`
+                            message: `คุณส่งรูปครบแล้ว (${rpcResult.person_limit ?? 3} รูปต่อคน) ไม่สามารถส่งเพิ่มได้`
                         });
                     }
                     if (rpcResult?.reason === 'collection_not_found') {

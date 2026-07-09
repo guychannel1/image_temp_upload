@@ -608,7 +608,7 @@
             {#each overQuotaCollections as col}
                 <div class="flex items-center gap-2 text-xs text-rose-400 font-medium">
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/></svg>
-                    <span>หัวข้อ "/{col.name}" ส่งรูปภาพเต็มขีดจำกัดแล้ว ({data.submissions.filter((s: any) => s.collection_id === col.id && !s.is_deleted).length} รูป) นักเรียนจะไม่สามารถส่งรูปเพิ่มได้</span>
+                    <span>หัวข้อ "/{col.name}" ส่งรูปภาพเต็มขีดจำกัดแล้ว ({data.submissions.filter((s: any) => s.collection_id === col.id && !s.is_deleted).length} รูป) ผู้ใช้งานจะไม่สามารถส่งรูปเพิ่มได้</span>
                 </div>
             {/each}
             {#each nearQuotaCollections as col}
