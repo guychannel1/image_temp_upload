@@ -64,6 +64,9 @@
     let compressionStatus = $state<'idle' | 'compressing' | 'done' | 'error'>('idle');
     let compressionProgress = $state(0);
     let isSubmitting = $state(false);
+
+    let selectedCol = $derived(data.activeCollections.find((c: any) => c.id === selectedCollectionId));
+    let selectedColLimit = $derived(selectedCol?.submission_limit ?? 500);
     
     let currentUploadedFile = $state<File | null>(null);
     let compressedFileBlob = $state<Blob | null>(null);
@@ -346,7 +349,7 @@
                 {#if overQuotaCollections.some(c => c.id === selectedCollectionId)}
                     <div class="w-full flex items-center gap-2 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-semibold mt-4">
                         <ShieldAlert class="w-4 h-4 shrink-0" />
-                        <span>หัวข้อนี้ถึงขีดจำกัดการรับส่งแล้ว ({MAX_SUBMISSIONS_PER_COLLECTION} รูป) กรุณาติดต่อผู้ดูแลระบบ</span>
+                        <span>หัวข้อนี้ถึงขีดจำกัดการรับส่งแล้ว ({selectedColLimit} รูป) กรุณาติดต่อผู้ดูแลระบบ</span>
                     </div>
                 {:else}
                     {#if nearQuotaCollections.some(c => c.id === selectedCollectionId)}

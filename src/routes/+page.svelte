@@ -17,15 +17,17 @@
     const WARN_SUBMISSIONS_PER_COLLECTION = 450; // 90% threshold
 
     let overQuotaCollections = $derived(
-        data.collections.filter(c => 
-            data.submissions.filter(s => s.collection_id === c.id).length >= MAX_SUBMISSIONS_PER_COLLECTION
-        )
+        data.collections.filter(c => {
+            const limit = c.submission_limit ?? 500;
+            return data.submissions.filter(s => s.collection_id === c.id).length >= limit;
+        })
     );
 
     let nearQuotaCollections = $derived(
         data.collections.filter(c => {
+            const limit = c.submission_limit ?? 500;
             const count = data.submissions.filter(s => s.collection_id === c.id).length;
-            return count >= WARN_SUBMISSIONS_PER_COLLECTION && count < MAX_SUBMISSIONS_PER_COLLECTION;
+            return count >= Math.floor(limit * 0.9) && count < limit;
         })
     );
 
