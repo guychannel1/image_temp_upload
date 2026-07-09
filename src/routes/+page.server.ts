@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from '$lib/server/supabase';
 import * as mockDb from '$lib/server/db';
+import { uploadToR2, deleteFromR2 } from '$lib/server/r2';
 import { fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 import { createHash } from 'crypto';
@@ -465,115 +466,117 @@ export const actions: Actions = {
         let submissionLimit = 500;
 
         if (isSupabaseConfigured && supabase) {
+            // =============================================
+            // STEP 1: Resolve collection_id if empty
+            // =============================================
+            if (!targetCollectionId || targetCollectionId.trim() === '') {
+                const { data: cols } = await supabase
+                    .from('collections')
+                    .select('id, name')
+                    .eq('is_active', true)
+                    .order('created_at', { ascending: true });
+
+                const defaultCol = cols?.find((c: any) => c.name === 'ทั่วไป' || c.name === 'general') || cols?.[0];
+                if (!defaultCol) {
+                    return fail(400, { success: false, message: 'ไม่มีหัวข้อเปิดรับส่งงานในระบบในขณะนี้' });
+                }
+                targetCollectionId = defaultCol.id;
+                colName = defaultCol.name;
+            }
+
+            // =============================================
+            // STEP 2: Upload file to Cloudflare R2
+            // (so we have a URL to pass to the atomic DB function)
+            // =============================================
+            let filePath = '';
+            let publicUrl = '';
             try {
-                // If collection_id is empty, resolve to a default active collection
-                if (!targetCollectionId || targetCollectionId.trim() === '') {
-                    const { data: cols } = await supabase
-                        .from('collections')
-                        .select('*')
-                        .eq('is_active', true)
-                        .order('created_at', { ascending: true });
-                    
-                    const defaultCol = cols?.find((c: any) => c.name === 'ทั่วไป' || c.name === 'general') || cols?.[0];
-                    if (!defaultCol) {
-                        return fail(400, { success: false, message: 'ไม่มีหัวข้อเปิดรับส่งงานในระบบในขณะนี้' });
-                    }
-                    targetCollectionId = defaultCol.id;
-                    colName = defaultCol.name;
-                    submissionLimit = defaultCol.submission_limit ?? 500;
-                } else {
-                    const { data: col } = await supabase
-                        .from('collections')
-                        .select('name, is_active, submission_limit')
-                        .eq('id', targetCollectionId)
-                        .single();
-
-                    if (!col) return fail(400, { success: false, message: 'ไม่พบหัวข้อการส่งรูปภาพ' });
-                    if (!col.is_active) return fail(400, { success: false, message: 'หัวข้อนี้ปิดรับส่งรูปภาพแล้ว' });
-                    colName = col.name;
-                    submissionLimit = col.submission_limit ?? 500;
-                }
-
-                // =============================================
-                // QUOTA GUARD: Max dynamic submissions per collection
-                // =============================================
-                const { count: submissionCount } = await supabase
-                    .from('submissions')
-                    .select('id', { count: 'exact', head: true })
-                    .eq('collection_id', targetCollectionId)
-                    .eq('is_deleted', false);
-
-                if (submissionCount !== null && submissionCount >= submissionLimit) {
-                    return fail(429, { 
-                        success: false, 
-                        message: `หัวข้อ "${colName}" ถึงขีดจำกัดการรับส่งภาพแล้ว (${submissionLimit} รูป) กรุณาติดต่อผู้ดูแลระบบ` 
-                    });
-                }
-
-                // Check duplicate name inside the same group
-                const { data: existing } = await supabase
-                    .from('submissions')
-                    .select('name')
-                    .eq('collection_id', targetCollectionId)
-                    .eq('group_name', subGroup);
-
-                if (existing) {
-                    let counter = 1;
-                    while (existing.some(s => s.name.toLowerCase() === finalName.toLowerCase())) {
-                        finalName = `${subName} (${counter})`;
-                        counter++;
-                    }
-                }
-
                 const uploadFile = file as any;
                 const originalName = uploadFile.name || 'image.jpg';
                 const fileExtension = originalName.split('.').pop()?.toLowerCase() || 'jpg';
-                const uniqueId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
-                const filePath = subGroup
+                const uniqueId = typeof crypto !== 'undefined' && crypto.randomUUID
+                    ? crypto.randomUUID()
+                    : Math.random().toString(36).substring(2, 15);
+
+                // We need colName for the path — do a lightweight fetch if still empty
+                if (!colName) {
+                    const { data: col } = await supabase
+                        .from('collections')
+                        .select('name')
+                        .eq('id', targetCollectionId)
+                        .single();
+                    if (!col) return fail(400, { success: false, message: 'ไม่พบหัวข้อการส่งรูปภาพ' });
+                    colName = col.name;
+                }
+
+                filePath = subGroup
                     ? `${colName}/${subGroup}/${uniqueId}.${fileExtension}`
                     : `${colName}/${uniqueId}.${fileExtension}`;
+
                 const fileBuffer = Buffer.from(await uploadFile.arrayBuffer());
                 const mimeType = uploadFile.type || 'image/jpeg';
 
-                // Upload to Supabase Storage Bucket 'images'
-                const { error: uploadError } = await supabase.storage
-                    .from('images')
-                    .upload(filePath, fileBuffer, {
-                        contentType: mimeType,
-                        upsert: true
-                    });
+                // Upload to Cloudflare R2 (retry built-in)
+                publicUrl = await uploadToR2(filePath, fileBuffer, mimeType);
+            } catch (storageErr: any) {
+                console.error('[submitForm] R2 upload failed:', storageErr);
+                return fail(500, { success: false, message: 'อัปโหลดไฟล์ล้มเหลว กรุณาลองใหม่อีกครั้ง' });
+            }
 
-                if (uploadError) throw uploadError;
-
-                // Get public URL
-                const { data: { publicUrl } } = supabase.storage
-                    .from('images')
-                    .getPublicUrl(filePath);
-
+            // =============================================
+            // STEP 3: Atomic DB insert via RPC
+            // (quota check + dup name + insert in ONE transaction with row lock)
+            // =============================================
+            try {
                 const original_size_str = formData.get('original_size');
                 const original_size = original_size_str ? parseInt(original_size_str as string, 10) : fileSize;
 
-                // Write metadata to table
-                const { error: dbError } = await supabase
-                    .from('submissions')
-                    .insert({
-                        collection_id: targetCollectionId,
-                        collection_name: colName,
-                        name: finalName,
-                        group_name: subGroup,
-                        file_path: filePath,
-                        file_size: fileSize,
-                        original_size,
-                        img_url: publicUrl,
-                        is_deleted: false
-                    });
+                const { data: rpcResult, error: rpcError } = await supabase.rpc(
+                    'submit_with_quota_guard',
+                    {
+                        p_collection_id:   targetCollectionId,
+                        p_collection_name: colName,
+                        p_name:            subName,
+                        p_group_name:      subGroup,
+                        p_file_path:       filePath,
+                        p_file_size:       fileSize,
+                        p_original_size:   original_size,
+                        p_img_url:         publicUrl,
+                        p_person_limit:    3   // max images per person per collection
+                    }
+                );
 
-                if (dbError) throw dbError;
+                if (rpcError) throw rpcError;
+
+                // RPC returns { success, reason?, limit?, id?, final_name? }
+                if (!rpcResult?.success) {
+                    // Rollback: delete the uploaded file from R2 since DB rejected it
+                    await deleteFromR2(filePath);
+
+                    if (rpcResult?.reason === 'quota_exceeded') {
+                        return fail(429, {
+                            success: false,
+                            message: `หัวข้อนี้ถึงขีดจำกัดการรับส่งภาพแล้ว (${rpcResult.limit ?? submissionLimit} รูป) กรุณาติดต่อผู้ดูแลระบบ`
+                        });
+                    }
+                    if (rpcResult?.reason === 'person_limit_exceeded') {
+                        return fail(429, {
+                            success: false,
+                            message: `คุณส่งรูปครบแล้ว (${rpcResult.person_limit ?? 3} รูปต่อคน) ไม่สามารถส่งเพิ่มได้`
+                        });
+                    }
+                    if (rpcResult?.reason === 'collection_not_found') {
+                        return fail(400, { success: false, message: 'ไม่พบหัวข้อการส่งรูปภาพ หรือหัวข้อปิดรับแล้ว' });
+                    }
+                    return fail(400, { success: false, message: 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่' });
+                }
 
                 return { success: true, message: 'ส่งรูปภาพเข้าระบบเสร็จสิ้นเรียบร้อย!' };
-            } catch (err: any) {
-                console.error(err);
-                return fail(500, { success: false, message: err.message || 'เกิดข้อผิดพลาดในการอัปโหลดไป Supabase' });
+            } catch (dbErr: any) {
+                console.error('[submitForm] RPC failed:', dbErr);
+                // Rollback: remove the file we just uploaded to R2
+                if (filePath) await deleteFromR2(filePath);
+                return fail(500, { success: false, message: dbErr.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล กรุณาลองใหม่' });
             }
         } else {
             // Fallback to local memory mock db

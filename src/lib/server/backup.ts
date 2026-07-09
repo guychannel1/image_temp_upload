@@ -2,6 +2,7 @@ import { env } from '$env/dynamic/private';
 import { supabase, isSupabaseConfigured } from './supabase';
 import * as mockDb from './db';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { getR2Client } from './r2';
 
 export interface BackupResult {
     success: boolean;
@@ -12,30 +13,6 @@ export interface BackupResult {
     error?: string;
 }
 
-/**
- * Creates S3 Client for Cloudflare R2
- */
-function getR2Client() {
-    const accessKeyId = env.CLOUDFLARE_R2_ACCESS_KEY_ID || '';
-    const secretAccessKey = env.CLOUDFLARE_R2_SECRET_ACCESS_KEY || '';
-    const accountId = env.CLOUDFLARE_R2_ACCOUNT_ID || '';
-    const bucketName = env.CLOUDFLARE_R2_BUCKET_NAME || '';
-
-    if (!accessKeyId || !secretAccessKey || !accountId || !bucketName) {
-        throw new Error('Cloudflare R2 configuration is missing in environment variables (.env). Please set CLOUDFLARE_R2_ACCESS_KEY_ID, CLOUDFLARE_R2_SECRET_ACCESS_KEY, CLOUDFLARE_R2_ACCOUNT_ID, and CLOUDFLARE_R2_BUCKET_NAME.');
-    }
-
-    const client = new S3Client({
-        region: 'auto',
-        endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-        credentials: {
-            accessKeyId,
-            secretAccessKey
-        }
-    });
-
-    return { client, bucketName };
-}
 
 /**
  * Downloads image file from Supabase Storage or via HTTP fetch or from Data URL

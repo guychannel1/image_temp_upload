@@ -69,6 +69,11 @@
     let compressedFileBlob = $state<Blob | null>(null);
     let originalSize = $state(0);
     let isStudentLightboxOpen = $state(false);
+    let retryCount = $state(0);
+    const MAX_RETRIES = 2;
+
+    // Error codes that should NOT be retried (user/quota errors)
+    const NON_RETRYABLE_MESSAGES = ['ถึงขีดจำกัด', 'ไม่พบหัวข้อ', 'ปิดรับ', 'ไม่มีหัวข้อ', 'ส่งรูปครบ'];
 
     /**
      * Toggle collection folder selection.
@@ -157,6 +162,7 @@
         studentName = '';
         studentGroup = '';
         selectedCollectionId = '';
+        retryCount = 0;
         resetFile();
     }
 
@@ -202,11 +208,29 @@
                 }
                 return async ({ update, result }) => {
                     if (result.type === 'success') {
+                        retryCount = 0;
                         appState.isUploadSuccessModalOpen = true;
                         resetStudentForm();
                     } else {
                         // @ts-ignore
-                        appState.showToast('เกิดข้อผิดพลาด', result.data?.message || 'ส่งรูปล้มเหลว', 'error');
+                        const msg: string = result.data?.message || 'ส่งรูปล้มเหลว';
+                        const isNonRetryable = NON_RETRYABLE_MESSAGES.some(k => msg.includes(k));
+
+                        if (!isNonRetryable && retryCount < MAX_RETRIES) {
+                            // Auto-retry after short delay
+                            retryCount++;
+                            isSubmitting = false;
+                            await update();
+                            // Wait 1s then resubmit
+                            setTimeout(() => {
+                                const form = document.querySelector<HTMLFormElement>('form[action="?/submitForm"]');
+                                form?.requestSubmit();
+                            }, 1000);
+                            return;
+                        }
+
+                        retryCount = 0;
+                        appState.showToast('เกิดข้อผิดพลาด', msg, 'error');
                     }
                     isSubmitting = false;
                     update();
@@ -336,7 +360,7 @@
                         class="w-full bg-brand-600 hover:bg-brand-700 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-white font-medium py-3 rounded-xl shadow-lg shadow-brand-500/10 hover:shadow-brand-600/20 transition-all duration-300 flex items-center justify-center space-x-2 text-sm mt-4">
                         {#if isSubmitting}
                             <Loader class="w-4 h-4 animate-spin" />
-                            <span>กำลังอัปโหลด...</span>
+                            <span>{retryCount > 0 ? `กำลังลองใหม่ (${retryCount}/${MAX_RETRIES})...` : 'กำลังอัปโหลด...'}</span>
                         {:else}
                             <Send class="w-4 h-4" />
                             <span>บันทึกและส่งรูปภาพ</span>

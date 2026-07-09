@@ -3,7 +3,7 @@
     import { 
         Folder, ArrowUp, Home, Search, Trash2, FolderPlus, Download, 
         Power, ChevronLeft, ChevronRight, ChevronDown, HardDrive, FolderGit2,
-        RefreshCw, Sidebar, RotateCcw, CloudUpload, User, Lock
+        RefreshCw, Sidebar, RotateCcw, CloudUpload, User, Lock, CheckSquare
     } from '@lucide/svelte';
     import { gsap } from 'gsap';
 
@@ -278,6 +278,26 @@
             selectedExplorerIds.delete(id);
         } else {
             selectedExplorerIds.add(id);
+        }
+        selectedExplorerIds = new Set(selectedExplorerIds);
+    }
+
+    let hasVisibleFiles = $derived(explorerItems.some((item: any) => item.type === 'file'));
+    let isAllSelected = $derived(
+        hasVisibleFiles && explorerItems.filter((item: any) => item.type === 'file').every((item: any) => selectedExplorerIds.has(item.id))
+    );
+
+    function toggleSelectAll() {
+        const visibleFiles = explorerItems.filter((item: any) => item.type === 'file');
+        if (visibleFiles.length === 0) return;
+        
+        const allSelected = visibleFiles.every((item: any) => selectedExplorerIds.has(item.id));
+        if (allSelected) {
+            // Deselect all visible files
+            visibleFiles.forEach((item: any) => selectedExplorerIds.delete(item.id));
+        } else {
+            // Select all visible files
+            visibleFiles.forEach((item: any) => selectedExplorerIds.add(item.id));
         }
         selectedExplorerIds = new Set(selectedExplorerIds);
     }
@@ -788,6 +808,13 @@
                                 <Search class="w-3.5 h-3.5" />
                             </div>
                         </div>
+
+                        {#if data.username === 'guyssar' && hasVisibleFiles}
+                            <button type="button" onclick={toggleSelectAll} class="p-2 bg-zinc-950 border border-zinc-855 rounded hover:bg-zinc-800/80 transition-all text-zinc-400 flex items-center space-x-1.5 text-xs font-sans" title={isAllSelected ? "ยกเลิกการเลือกทั้งหมด" : "เลือกทั้งหมด"}>
+                                <CheckSquare class="w-4 h-4 {isAllSelected ? 'text-emerald-400' : ''}" />
+                                <span class="hidden md:inline">{isAllSelected ? "ยกเลิกเลือก" : "เลือกทั้งหมด"}</span>
+                            </button>
+                        {/if}
 
                         {#if selectedExplorerIds.size > 0}
                             <!-- Restore selected (if in deleted drive) -->
