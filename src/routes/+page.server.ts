@@ -12,6 +12,14 @@ function hashPassword(password: string): string {
     return createHash('sha256').update(password).digest('hex');
 }
 
+function chunkArray<T>(arr: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) {
+        chunks.push(arr.slice(i, i + size));
+    }
+    return chunks;
+}
+
 export const load: PageServerLoad = async ({ cookies }) => {
     const session = cookies.get('admin_session');
     const loggedIn = !!session;
@@ -369,11 +377,14 @@ export const actions: Actions = {
 
             if (isSupabaseConfigured && supabase) {
                 // Soft delete: set is_deleted = TRUE in DB (Do not remove storage file!)
-                const { error } = await supabase
-                    .from('submissions')
-                    .update({ is_deleted: true })
-                    .in('id', ids);
-                if (error) throw error;
+                const chunks = chunkArray(ids, 100);
+                for (const chunk of chunks) {
+                    const { error } = await supabase
+                        .from('submissions')
+                        .update({ is_deleted: true })
+                        .in('id', chunk);
+                    if (error) throw error;
+                }
             } else {
                 mockDb.deleteSubmissions(ids);
             }
@@ -400,21 +411,27 @@ export const actions: Actions = {
             const ids: string[] = JSON.parse(idsString);
 
             if (isSupabaseConfigured && supabase) {
-                // 1. Fetch file paths first so we can delete from R2
-                const { data: subs, error: fetchErr } = await supabase
-                    .from('submissions')
-                    .select('file_path')
-                    .in('id', ids);
+                const chunks = chunkArray(ids, 100);
+                const subs: any[] = [];
 
-                if (fetchErr) throw fetchErr;
+                // 1. Fetch file paths first so we can delete from R2 (in chunks)
+                for (const chunk of chunks) {
+                    const { data: chunkSubs, error: fetchErr } = await supabase
+                        .from('submissions')
+                        .select('file_path')
+                        .in('id', chunk);
+                    if (fetchErr) throw fetchErr;
+                    if (chunkSubs) subs.push(...chunkSubs);
+                }
 
-                // 2. Delete rows from DB
-                const { error: deleteErr } = await supabase
-                    .from('submissions')
-                    .delete()
-                    .in('id', ids);
-
-                if (deleteErr) throw deleteErr;
+                // 2. Delete rows from DB (in chunks)
+                for (const chunk of chunks) {
+                    const { error: deleteErr } = await supabase
+                        .from('submissions')
+                        .delete()
+                        .in('id', chunk);
+                    if (deleteErr) throw deleteErr;
+                }
 
                 // 3. Delete files from Cloudflare R2 (bulk request)
                 if (subs && subs.length > 0) {
@@ -444,11 +461,14 @@ export const actions: Actions = {
             const ids: string[] = JSON.parse(idsString);
 
             if (isSupabaseConfigured && supabase) {
-                const { error } = await supabase
-                    .from('submissions')
-                    .update({ is_deleted: false })
-                    .in('id', ids);
-                if (error) throw error;
+                const chunks = chunkArray(ids, 100);
+                for (const chunk of chunks) {
+                    const { error } = await supabase
+                        .from('submissions')
+                        .update({ is_deleted: false })
+                        .in('id', chunk);
+                    if (error) throw error;
+                }
             } else {
                 mockDb.restoreSubmissions(ids);
             }

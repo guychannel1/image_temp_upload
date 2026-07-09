@@ -3,7 +3,7 @@
     import { 
         Folder, ArrowUp, Home, Search, Trash2, FolderPlus, Download, 
         Power, ChevronLeft, ChevronRight, ChevronDown, HardDrive, FolderGit2,
-        RefreshCw, Sidebar, RotateCcw, CloudUpload, User, Lock, CheckSquare
+        RefreshCw, Sidebar, RotateCcw, CloudUpload, User, Lock, CheckSquare, Loader2
     } from '@lucide/svelte';
     import { gsap } from 'gsap';
 
@@ -27,10 +27,34 @@
     let isDownloadZipModalOpen = $state(false);
     let isAdminLightboxOpen = $state(false);
     let isBackingUp = $state(false);
+    let isProcessing = $state(false);
+    let processingText = $state('');
+    let progressPercent = $state(0);
+
+    let progressInterval: any = null;
+    function startProcessing(text: string) {
+        isProcessing = true;
+        processingText = text;
+        progressPercent = 0;
+        
+        if (progressInterval) clearInterval(progressInterval);
+        progressInterval = setInterval(() => {
+            progressPercent += (95 - progressPercent) * 0.15;
+        }, 100);
+    }
+
+    function stopProcessing() {
+        if (progressInterval) clearInterval(progressInterval);
+        progressPercent = 100;
+        setTimeout(() => {
+            isProcessing = false;
+        }, 400);
+    }
 
     let currentViewerIndex = $state(-1);
     let viewerFiles = $state<{ id: string; name: string; file_path: string; img_data: string; original_size: number }[]>([]);
 
+    let isLoggingIn = $state(false);
     let loginError = $state('');
 
     let expandedCollections = $state<Record<string, boolean>>({});
@@ -486,7 +510,9 @@
             {/if}
 
             <form method="POST" action="?/login" use:enhance={() => {
+                isLoggingIn = true;
                 return async ({ result, update }) => {
+                    isLoggingIn = false;
                     if (result.type === 'success') {
                         loginError = '';
                         data.loggedIn = true;
@@ -506,8 +532,8 @@
                 <div class="space-y-2">
                     <label for="username" class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">Username</label>
                     <div class="relative">
-                        <input type="text" id="username" name="username" required placeholder="username" autocomplete="username"
-                            class="w-full bg-zinc-900/60 border border-zinc-700/80 rounded-xl pl-10 pr-4 py-3 text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all text-sm">
+                        <input type="text" id="username" name="username" required placeholder="username" autocomplete="username" disabled={isLoggingIn}
+                            class="w-full bg-zinc-900/60 border border-zinc-700/80 rounded-xl pl-10 pr-4 py-3 text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all text-sm disabled:opacity-50">
                         <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-500">
                             <User class="w-4 h-4" />
                         </div>
@@ -517,16 +543,21 @@
                 <div class="space-y-2">
                     <label for="password" class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">Password</label>
                     <div class="relative">
-                        <input type="password" id="password" name="password" required placeholder="••••" autocomplete="current-password"
-                            class="w-full bg-zinc-900/60 border border-zinc-700/80 rounded-xl pl-10 pr-4 py-3 text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all text-sm">
+                        <input type="password" id="password" name="password" required placeholder="••••" autocomplete="current-password" disabled={isLoggingIn}
+                            class="w-full bg-zinc-900/60 border border-zinc-700/80 rounded-xl pl-10 pr-4 py-3 text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all text-sm disabled:opacity-50">
                         <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-500">
                             <Lock class="w-4 h-4" />
                         </div>
                     </div>
                 </div>
 
-                <button type="submit" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-medium py-3 rounded-xl shadow-lg shadow-brand-500/10 hover:shadow-brand-600/20 transition-all duration-300 flex items-center justify-center space-x-2 text-sm mt-6">
-                    <span>เข้าสู่ระบบ</span>
+                <button type="submit" disabled={isLoggingIn} class="w-full bg-brand-600 hover:bg-brand-700 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-medium py-3 rounded-xl shadow-lg shadow-brand-500/10 hover:shadow-brand-600/20 transition-all duration-300 flex items-center justify-center space-x-2 text-sm mt-6">
+                    {#if isLoggingIn}
+                        <Loader2 class="w-4.5 h-4.5 animate-spin" />
+                        <span>กำลังเข้าสู่ระบบ...</span>
+                    {:else}
+                        <span>เข้าสู่ระบบ</span>
+                    {/if}
                 </button>
             </form>
         </div>
@@ -821,7 +852,9 @@
                             {#if currentExplorerPath[0] === 'deleted'}
                                 <div class="flex items-center space-x-1.5">
                                     <form method="POST" action="?/restoreSubmissions" use:enhance={() => {
+                                        startProcessing('กำลังกู้คืนรูปภาพที่เลือก...');
                                         return async ({ result, update }) => {
+                                            stopProcessing();
                                             if (result.type === 'success') {
                                                 showToast('กู้คืนสำเร็จ', 'กู้คืนรูปภาพที่เลือกเรียบร้อยแล้ว', 'success');
                                                 selectedExplorerIds.clear();
@@ -837,7 +870,9 @@
 
                                     {#if data.username === 'guyssar'}
                                         <form method="POST" action="?/deleteSubmissionsPermanently" use:enhance={() => {
+                                            startProcessing('กำลังลบรูปภาพที่เลือกออกจาก R2 และระบบอย่างถาวร...');
                                             return async ({ result, update }) => {
+                                                stopProcessing();
                                                 if (result.type === 'success') {
                                                     showToast('ลบสำเร็จ', 'ลบภาพที่เลือกแบบถาวรเรียบร้อยแล้ว', 'success');
                                                     selectedExplorerIds.clear();
@@ -854,7 +889,9 @@
                                 </div>
                             {:else}
                                 <form method="POST" action="?/deleteSubmissions" use:enhance={() => {
+                                    startProcessing('กำลังย้ายรูปภาพที่เลือกไปยังถังขยะ...');
                                     return async ({ result, update }) => {
+                                        stopProcessing();
                                         if (result.type === 'success') {
                                             showToast('ลบเสร็จสิ้น', 'ลบภาพที่เลือกไปยังถังขยะเรียบร้อย', 'success');
                                             selectedExplorerIds.clear();
@@ -1113,6 +1150,34 @@
                     class="w-full text-white font-medium py-2.5 rounded-xl transition-all text-sm shadow-lg focus:outline-none {confirmTheme === 'danger' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/10' : (confirmTheme === 'success' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/10' : 'bg-brand-600 hover:bg-brand-700 shadow-brand-600/10')}">
                     ยืนยัน
                 </button>
+            </div>
+        </div>
+    </div>
+{/if}
+
+<!-- Processing Overlay Modal -->
+{#if isProcessing}
+    <div class="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm px-4">
+        <div class="glass max-w-sm w-full rounded-3xl p-6 shadow-2xl border border-zinc-800 space-y-6 text-center">
+            <div class="mx-auto w-16 h-16 rounded-full bg-brand-500/10 border border-brand-500/20 flex items-center justify-center text-brand-400">
+                <Loader2 class="w-8 h-8 animate-spin" />
+            </div>
+            
+            <div class="space-y-4">
+                <div class="space-y-1">
+                    <h3 class="text-lg font-bold" style="color: var(--text-primary) !important;">กำลังประมวลผล</h3>
+                    <p class="text-xs sm:text-sm" style="color: var(--text-secondary) !important;">{processingText}</p>
+                </div>
+
+                <div class="space-y-1.5">
+                    <div class="h-2 w-full bg-zinc-900 border border-zinc-800 rounded-full overflow-hidden p-[1px]">
+                        <div class="h-full bg-gradient-to-r from-brand-500 to-emerald-400 rounded-full transition-all duration-300 ease-out" style="width: {progressPercent}%;"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] text-zinc-500 font-mono">
+                        <span>ความคืบหน้า</span>
+                        <span>{Math.round(progressPercent)}%</span>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
