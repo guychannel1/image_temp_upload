@@ -819,20 +819,39 @@
                         {#if selectedExplorerIds.size > 0}
                             <!-- Restore selected (if in deleted drive) -->
                             {#if currentExplorerPath[0] === 'deleted'}
-                                <form method="POST" action="?/restoreSubmissions" use:enhance={() => {
-                                    return async ({ result, update }) => {
-                                        if (result.type === 'success') {
-                                            showToast('กู้คืนสำเร็จ', 'กู้คืนรูปภาพที่เลือกเรียบร้อยแล้ว', 'success');
-                                            selectedExplorerIds.clear();
-                                        }
-                                        update();
-                                    };
-                                }}>
-                                    <input type="hidden" name="ids" value={JSON.stringify([...selectedExplorerIds])}>
-                                    <button type="button" onclick={(e) => { const form = e.currentTarget.closest('form'); showConfirm('กู้คืนภาพที่เลือก', 'คุณต้องการกู้คืนรูปภาพที่เลือกทั้งหมดใช่หรือไม่?', () => form?.requestSubmit(), 'success'); }} class="p-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/20 transition-all" title="กู้คืนที่เลือก">
-                                        <RotateCcw class="w-4 h-4" />
-                                    </button>
-                                </form>
+                                <div class="flex items-center space-x-1.5">
+                                    <form method="POST" action="?/restoreSubmissions" use:enhance={() => {
+                                        return async ({ result, update }) => {
+                                            if (result.type === 'success') {
+                                                showToast('กู้คืนสำเร็จ', 'กู้คืนรูปภาพที่เลือกเรียบร้อยแล้ว', 'success');
+                                                selectedExplorerIds.clear();
+                                            }
+                                            update();
+                                        };
+                                    }}>
+                                        <input type="hidden" name="ids" value={JSON.stringify([...selectedExplorerIds])}>
+                                        <button type="button" onclick={(e) => { const form = e.currentTarget.closest('form'); showConfirm('กู้คืนภาพที่เลือก', 'คุณต้องการกู้คืนรูปภาพที่เลือกทั้งหมดใช่หรือไม่?', () => form?.requestSubmit(), 'success'); }} class="p-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/20 transition-all" title="กู้คืนที่เลือก">
+                                            <RotateCcw class="w-4 h-4" />
+                                        </button>
+                                    </form>
+
+                                    {#if data.username === 'guyssar'}
+                                        <form method="POST" action="?/deleteSubmissionsPermanently" use:enhance={() => {
+                                            return async ({ result, update }) => {
+                                                if (result.type === 'success') {
+                                                    showToast('ลบสำเร็จ', 'ลบภาพที่เลือกแบบถาวรเรียบร้อยแล้ว', 'success');
+                                                    selectedExplorerIds.clear();
+                                                }
+                                                update();
+                                            };
+                                        }}>
+                                            <input type="hidden" name="ids" value={JSON.stringify([...selectedExplorerIds])}>
+                                            <button type="button" onclick={(e) => { const form = e.currentTarget.closest('form'); showConfirm('ลบภาพถาวร', 'คุณต้องการลบภาพที่เลือกแบบถาวรออกจากระบบและ R2 ใช่หรือไม่? (ไม่สามารถย้อนกลับได้)', () => form?.requestSubmit(), 'danger'); }} class="p-2 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded hover:bg-rose-500/20 transition-all" title="ลบถาวรที่เลือก">
+                                                <Trash2 class="w-4 h-4" />
+                                            </button>
+                                        </form>
+                                    {/if}
+                                </div>
                             {:else}
                                 <form method="POST" action="?/deleteSubmissions" use:enhance={() => {
                                     return async ({ result, update }) => {

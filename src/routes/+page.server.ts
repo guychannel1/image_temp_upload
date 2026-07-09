@@ -1,6 +1,6 @@
 import { supabase, isSupabaseConfigured } from '$lib/server/supabase';
 import * as mockDb from '$lib/server/db';
-import { uploadToR2, deleteFromR2 } from '$lib/server/r2';
+import { uploadToR2, deleteFromR2, deleteObjectsFromR2 } from '$lib/server/r2';
 import { fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 import { createHash } from 'crypto';
@@ -381,6 +381,55 @@ export const actions: Actions = {
             return { success: true, message: 'ลบรูปภาพที่เลือกไปยังถังขยะเรียบร้อย' };
         } catch (e) {
             return fail(400, { success: false, message: 'เกิดข้อผิดพลาดในการลบรูปภาพ' });
+        }
+    },
+
+    // Permanent Delete Submissions (only allowed for guyssar)
+    deleteSubmissionsPermanently: async ({ request, cookies }) => {
+        const session = cookies.get('admin_session');
+        if (session !== 'guyssar') {
+            return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการลบรูปภาพถาวร' });
+        }
+
+        const formData = await request.formData();
+        const idsString = formData.get('ids') as string;
+
+        if (!idsString) return fail(400, { success: false });
+
+        try {
+            const ids: string[] = JSON.parse(idsString);
+
+            if (isSupabaseConfigured && supabase) {
+                // 1. Fetch file paths first so we can delete from R2
+                const { data: subs, error: fetchErr } = await supabase
+                    .from('submissions')
+                    .select('file_path')
+                    .in('id', ids);
+
+                if (fetchErr) throw fetchErr;
+
+                // 2. Delete rows from DB
+                const { error: deleteErr } = await supabase
+                    .from('submissions')
+                    .delete()
+                    .in('id', ids);
+
+                if (deleteErr) throw deleteErr;
+
+                // 3. Delete files from Cloudflare R2 (bulk request)
+                if (subs && subs.length > 0) {
+                    const paths = subs.map(s => s.file_path).filter(Boolean);
+                    await deleteObjectsFromR2(paths);
+                }
+            } else {
+                // Mock DB: permanently delete
+                mockDb.deleteSubmissionsPermanently(ids);
+            }
+
+            return { success: true, message: 'ลบรูปภาพที่เลือกแบบถาวรเรียบร้อยแล้ว' };
+        } catch (e) {
+            console.error('[deleteSubmissionsPermanently] Failed:', e);
+            return fail(400, { success: false, message: 'เกิดข้อผิดพลาดในการลบรูปภาพถาวร' });
         }
     },
 

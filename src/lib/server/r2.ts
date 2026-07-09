@@ -1,5 +1,5 @@
 import { env } from '$env/dynamic/private';
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 
 /**
  * Public base URL for the R2 bucket (r2.dev subdomain or custom domain).
@@ -90,5 +90,32 @@ export async function deleteFromR2(filePath: string): Promise<void> {
         }));
     } catch (err) {
         console.warn('[deleteFromR2] Rollback delete failed (non-fatal):', err);
+    }
+}
+
+/**
+ * Deletes multiple files from Cloudflare R2 in batch.
+ * Max 1000 files per single request.
+ *
+ * @param filePaths - Array of R2 object keys to delete
+ */
+export async function deleteObjectsFromR2(filePaths: string[]): Promise<void> {
+    if (!filePaths || filePaths.length === 0) return;
+    try {
+        const { client, bucketName } = getR2Client();
+        const chunkSize = 1000;
+        
+        for (let i = 0; i < filePaths.length; i += chunkSize) {
+            const chunk = filePaths.slice(i, i + chunkSize);
+            await client.send(new DeleteObjectsCommand({
+                Bucket: bucketName,
+                Delete: {
+                    Objects: chunk.map(path => ({ Key: path })),
+                    Quiet: true
+                }
+            }));
+        }
+    } catch (err) {
+        console.warn('[deleteObjectsFromR2] Bulk delete failed (non-fatal):', err);
     }
 }

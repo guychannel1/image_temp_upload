@@ -163,6 +163,11 @@ export function deleteSubmissions(ids: string[]) {
     });
 }
 
+export function deleteSubmissionsPermanently(ids: string[]) {
+    const set = new Set(ids);
+    submissions = submissions.filter(s => !set.has(s.id));
+}
+
 export function restoreSubmissions(ids: string[]) {
     const set = new Set(ids);
     submissions = submissions.map(s => {
