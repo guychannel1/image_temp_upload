@@ -339,7 +339,7 @@
                                             {:else if isNear}
                                                 <span class="text-amber-400 font-semibold">ใกล้เต็มโควต้า</span>
                                             {:else}
-                                                <span>หัวข้อส่งงานทั่วไป</span>
+                                                <!-- <span>หัวข้อส่งงานทั่วไป</span> -->
                                             {/if}
                                         </div>
                                     </div>
