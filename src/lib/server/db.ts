@@ -177,3 +177,29 @@ export function restoreSubmissions(ids: string[]) {
         return s;
     });
 }
+
+export function importBackupData(newCols: any[], newSubs: any[]) {
+    collections.length = 0;
+    collections.push(...newCols.map(c => ({
+        id: c.id || ('col-' + Math.random().toString(36).substring(2, 9)),
+        name: c.name,
+        is_active: c.is_active ?? true,
+        submission_limit: c.submission_limit ?? 500
+    })));
+    
+    submissions.length = 0;
+    submissions.push(...newSubs.map(s => ({
+        id: s.id || ('sub-' + Math.random().toString(36).substring(2, 9)),
+        collection_id: s.collection_id,
+        collection_name: s.collection_name,
+        name: s.name,
+        group_name: s.group_name || '',
+        category: s.collection_name,
+        file_path: s.file_path,
+        file_size: s.file_size,
+        original_size: s.original_size || s.file_size,
+        img_data: s.img_url || s.img_data || '',
+        is_deleted: s.is_deleted ?? false
+    })));
+}
+

@@ -24,7 +24,7 @@
         <!-- Logo / Brand element with micro-interaction hover scaling -->
         <a href="/" class="logo-area flex items-center gap-2.5 shrink-0" onclick={(e) => { e.preventDefault(); appState.activeTab = 'portal'; }}>
             <div class="flex flex-col leading-none">
-                <span class="logo-title text-sm font-bold tracking-tight">Temp</span>
+                <span class="logo-title text-xl font-bold tracking-tight">Temporarily</span>
                 {#if !data.isSupabaseLive}
                     <span class="text-[9px] font-semibold text-amber-500 uppercase tracking-wide">Mock DB</span>
                 {/if}

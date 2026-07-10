@@ -24,10 +24,53 @@ export const load: PageServerLoad = async ({ cookies }) => {
     const session = cookies.get('admin_session');
     const loggedIn = !!session;
     const username = session || '';
-    const userRole = username === 'guyssar' ? 'admin' : (username === 'admin' ? 'staff' : '');
+    
+    let userRole = '';
+    if (loggedIn) {
+        if (isSupabaseConfigured && supabase) {
+            try {
+                const { data: user } = await supabase
+                    .from('app_users')
+                    .select('role')
+                    .eq('username', username)
+                    .maybeSingle();
+                if (user) {
+                    userRole = user.role;
+                }
+            } catch (err) {
+                console.error('Failed to query user role from Supabase:', err);
+            }
+        }
+        if (!userRole) {
+            const user = mockDb.appUsers.find(u => u.username === username);
+            if (user) {
+                userRole = user.role;
+            }
+        }
+    }
 
     let collectionsList: any[] = [];
     let submissionsList: any[] = [];
+    let usersList: any[] = [];
+
+    if (loggedIn && userRole === 'admin') {
+        if (isSupabaseConfigured && supabase) {
+            try {
+                const { data: dbUsers } = await supabase
+                    .from('app_users')
+                    .select('id, username, role, created_at')
+                    .order('created_at', { ascending: true });
+                if (dbUsers) {
+                    usersList = dbUsers;
+                }
+            } catch (err) {
+                console.error('Failed to load users from Supabase:', err);
+                usersList = mockDb.appUsers.map(u => ({ id: u.id, username: u.username, role: u.role, created_at: new Date().toISOString() }));
+            }
+        } else {
+            usersList = mockDb.appUsers.map(u => ({ id: u.id, username: u.username, role: u.role, created_at: new Date().toISOString() }));
+        }
+    }
 
     if (isSupabaseConfigured && supabase) {
         try {
@@ -114,6 +157,8 @@ export const load: PageServerLoad = async ({ cookies }) => {
         loggedIn,
         userRole,
         username,
+        users: usersList,
+        usersList,
         isSupabaseLive: isSupabaseConfigured
     };
 };
@@ -142,7 +187,7 @@ export const actions: Actions = {
                         sameSite: 'strict',
                         maxAge: 60 * 60 * 24 // 1 day
                     });
-                    return { success: true, loggedIn: true, role: user.role };
+                    return { success: true, loggedIn: true, role: user.role, username };
                 }
             } catch (err) {
                 console.error('Supabase user auth failed, falling back to mock auth:', err);
@@ -158,7 +203,7 @@ export const actions: Actions = {
                 sameSite: 'strict',
                 maxAge: 60 * 60 * 24 // 1 day
             });
-            return { success: true, loggedIn: true, role: user.role };
+            return { success: true, loggedIn: true, role: user.role, username };
         }
 
         return fail(400, { success: false, message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
@@ -398,7 +443,7 @@ export const actions: Actions = {
     // Permanent Delete Submissions (only allowed for guyssar)
     deleteSubmissionsPermanently: async ({ request, cookies }) => {
         const session = cookies.get('admin_session');
-        if (session !== 'guyssar') {
+        if (session?.toLowerCase() !== 'guyssar') {
             return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการลบรูปภาพถาวร' });
         }
 
@@ -728,5 +773,232 @@ export const actions: Actions = {
         } catch (err: any) {
             return fail(500, { success: false, message: err.message || 'เกิดข้อผิดพลาดที่คาดไม่ถึงในการตั้งค่าคีย์หรือการเชื่อมต่อ' });
         }
+    },
+
+    importBackupJson: async ({ request, cookies }) => {
+        const session = cookies.get('admin_session');
+        if (!session) {
+            return fail(401, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
+        }
+
+        const formData = await request.formData();
+        const file = formData.get('backup_file') as File;
+        if (!file || file.size === 0) {
+            return fail(400, { success: false, message: 'ไม่พบไฟล์สำรองข้อมูล หรือไฟล์ไม่มีข้อมูล' });
+        }
+
+        try {
+            const text = await file.text();
+            const backupData = JSON.parse(text);
+
+            if (!backupData || typeof backupData !== 'object') {
+                return fail(400, { success: false, message: 'โครงสร้างไฟล์ JSON ไม่ถูกต้อง' });
+            }
+
+            const collections = backupData.collections || [];
+            const submissions = backupData.submissions || [];
+
+            if (!Array.isArray(collections) || !Array.isArray(submissions)) {
+                return fail(400, { success: false, message: 'โครงสร้าง collections หรือ submissions ในไฟล์ JSON ไม่ถูกต้อง' });
+            }
+
+            if (isSupabaseConfigured && supabase) {
+                // 1. นำเข้า Collections
+                if (collections.length > 0) {
+                    const { error: colErr } = await supabase
+                        .from('collections')
+                        .upsert(
+                            collections.map(c => ({
+                                id: c.id,
+                                name: c.name,
+                                is_active: c.is_active ?? true,
+                                submission_limit: c.submission_limit ?? 500,
+                                created_at: c.created_at || new Date().toISOString()
+                            }))
+                        );
+
+                    if (colErr) {
+                        console.error('[importBackupJson] Collections upsert error:', colErr);
+                        throw new Error(`ไม่สามารถกู้คืนหัวข้อส่งงานได้: ${colErr.message}`);
+                    }
+                }
+
+                // 2. นำเข้า Submissions
+                if (submissions.length > 0) {
+                    const { error: subErr } = await supabase
+                        .from('submissions')
+                        .upsert(
+                            submissions.map(s => ({
+                                id: s.id,
+                                collection_id: s.collection_id,
+                                collection_name: s.collection_name,
+                                name: s.name,
+                                group_name: s.group_name || null,
+                                file_path: s.file_path,
+                                file_size: s.file_size,
+                                original_size: s.original_size || s.file_size,
+                                img_url: s.img_url,
+                                is_deleted: s.is_deleted ?? false,
+                                created_at: s.created_at || new Date().toISOString()
+                            }))
+                        );
+
+                    if (subErr) {
+                        console.error('[importBackupJson] Submissions upsert error:', subErr);
+                        throw new Error(`ไม่สามารถกู้คืนรูปภาพส่งงานได้: ${subErr.message}`);
+                    }
+                }
+            } else {
+                // Fallback to mock DB
+                mockDb.importBackupData(collections, submissions);
+            }
+
+            return { 
+                success: true, 
+                message: `นำเข้าข้อมูลสำรองสำเร็จเรียบร้อย! (หัวข้อส่งงาน: ${collections.length} รายการ, รูปภาพส่งงาน: ${submissions.length} รูป)` 
+            };
+        } catch (err: any) {
+            console.error('[importBackupJson] Restore error:', err);
+            return fail(500, { success: false, message: err.message || 'เกิดข้อผิดพลาดในการประมวลผลไฟล์ JSON' });
+        }
+    },
+
+    createUser: async ({ request, cookies }) => {
+        const session = cookies.get('admin_session');
+        if (session?.toLowerCase() !== 'guyssar') {
+            return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการสร้างผู้ใช้ (เฉพาะ guyssar เท่านั้น)' });
+        }
+
+        const data = await request.formData();
+        const newUsername = (data.get('username') as string || '').trim().toLowerCase();
+        const role = (data.get('role') as string || 'staff') as 'admin' | 'staff';
+        const password = data.get('password') as string || '';
+
+        if (!newUsername || !password) {
+            return fail(400, { success: false, message: 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน' });
+        }
+
+        const passwordHash = hashPassword(password);
+
+        if (isSupabaseConfigured && supabase) {
+            try {
+                // Check if user already exists
+                const { data: existingUser } = await supabase
+                    .from('app_users')
+                    .select('id')
+                    .eq('username', newUsername)
+                    .maybeSingle();
+
+                if (existingUser) {
+                    return fail(400, { success: false, message: 'ชื่อผู้ใช้นี้มีอยู่ในระบบแล้ว' });
+                }
+
+                const { error } = await supabase
+                    .from('app_users')
+                    .insert([{ username: newUsername, role, password_hash: passwordHash }]);
+
+                if (error) {
+                    return fail(500, { success: false, message: `ล้มเหลว: ${error.message}` });
+                }
+            } catch (err: any) {
+                return fail(500, { success: false, message: err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล' });
+            }
+        } else {
+            // Mock DB
+            if (mockDb.appUsers.some(u => u.username === newUsername)) {
+                return fail(400, { success: false, message: 'ชื่อผู้ใช้นี้มีอยู่ในระบบแล้ว' });
+            }
+            mockDb.appUsers.push({
+                id: 'usr-' + Date.now(),
+                username: newUsername,
+                role,
+                password_hash: passwordHash
+            });
+        }
+
+        return { success: true, message: `สร้างผู้ใช้งาน "${newUsername}" (${role}) เรียบร้อยแล้ว` };
+    },
+
+    changeUserPassword: async ({ request, cookies }) => {
+        const session = cookies.get('admin_session');
+        if (!session) {
+            return fail(401, { success: false, message: 'กรุณาเข้าสู่ระบบ' });
+        }
+
+        const data = await request.formData();
+        const targetUsername = (data.get('username') as string || '').trim().toLowerCase();
+        const newPassword = data.get('password') as string || '';
+
+        if (!targetUsername || !newPassword) {
+            return fail(400, { success: false, message: 'ข้อมูลไม่ครบถ้วน' });
+        }
+
+        // Only guyssar can change anyone's password, other users can only change their own password
+        if (session?.toLowerCase() !== 'guyssar' && session?.toLowerCase() !== targetUsername?.toLowerCase()) {
+            return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการเปลี่ยนรหัสผ่านของผู้อื่น' });
+        }
+
+        const passwordHash = hashPassword(newPassword);
+
+        if (isSupabaseConfigured && supabase) {
+            try {
+                const { error } = await supabase
+                    .from('app_users')
+                    .update({ password_hash: passwordHash })
+                    .eq('username', targetUsername);
+
+                if (error) {
+                    return fail(500, { success: false, message: `ล้มเหลว: ${error.message}` });
+                }
+            } catch (err: any) {
+                return fail(500, { success: false, message: err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล' });
+            }
+        } else {
+            // Mock DB
+            const user = mockDb.appUsers.find(u => u.username === targetUsername);
+            if (!user) {
+                return fail(404, { success: false, message: 'ไม่พบผู้ใช้ที่ระบุ' });
+            }
+            user.password_hash = passwordHash;
+        }
+
+        return { success: true, message: `เปลี่ยนรหัสผ่านของ "${targetUsername}" เรียบร้อยแล้ว` };
+    },
+
+    deleteUser: async ({ request, cookies }) => {
+        const session = cookies.get('admin_session');
+        if (session?.toLowerCase() !== 'guyssar') {
+            return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการลบผู้ใช้ (เฉพาะ guyssar เท่านั้น)' });
+        }
+
+        const data = await request.formData();
+        const targetUsername = (data.get('username') as string || '').trim().toLowerCase();
+
+        if (targetUsername?.toLowerCase() === 'guyssar') {
+            return fail(400, { success: false, message: 'ไม่สามารถลบบัญชีหลัก guyssar ได้' });
+        }
+
+        if (isSupabaseConfigured && supabase) {
+            try {
+                const { error } = await supabase
+                    .from('app_users')
+                    .delete()
+                    .eq('username', targetUsername);
+
+                if (error) {
+                    return fail(500, { success: false, message: `ล้มเหลว: ${error.message}` });
+                }
+            } catch (err: any) {
+                return fail(500, { success: false, message: err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล' });
+            }
+        } else {
+            // Mock DB
+            const index = mockDb.appUsers.findIndex(u => u.username === targetUsername);
+            if (index !== -1) {
+                mockDb.appUsers.splice(index, 1);
+            }
+        }
+
+        return { success: true, message: `ลบผู้ใช้งาน "${targetUsername}" เรียบร้อยแล้ว` };
     }
 };

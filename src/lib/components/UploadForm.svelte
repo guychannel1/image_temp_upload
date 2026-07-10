@@ -2,7 +2,7 @@
     import { appState } from '$lib/appState.svelte';
     import { enhance } from '$app/forms';
     import { browser } from '$app/environment';
-    import { Upload, X, Eye, Loader, CircleCheck, ShieldAlert, Send } from '@lucide/svelte';
+    import { Upload, X, Eye, Loader, CircleCheck, ShieldAlert, Send, User, Users, Camera, Image, Check } from '@lucide/svelte';
     import { gsap } from 'gsap';
 
     /**
@@ -13,7 +13,7 @@
      */
     interface Props {
         data: {
-            activeCollections: Array<{ id: string; name: string; is_active: boolean }>;
+            activeCollections: Array<{ id: string; name: string; is_active: boolean; submission_limit?: number }>;
         };
         MAX_SUBMISSIONS_PER_COLLECTION: number;
         overQuotaCollections: Array<{ id: string; name: string }>;
@@ -182,197 +182,312 @@
     }
 </script>
 
-<section class="max-w-2xl mx-auto w-full space-y-6 animate-fade-in flex flex-col justify-center min-h-[60vh] py-8">
+<section class="max-w-2xl mx-auto w-full space-y-8 animate-fade-in py-6 sm:py-10">
     <!-- Header title -->
-    <!-- <div class="text-center space-y-2">
-        <h2 class="text-2xl font-bold text-zinc-100 tracking-tight dark-mode-text">ส่งรูปภาพผลงาน / กิจกรรม</h2>
-        <p class="text-zinc-400 text-xs sm:text-sm light-subtext">อัปโหลดรูปภาพกิจกรรมของคุณเพื่อบันทึกลงระบบชั่วคราวอย่างรวดเร็ว</p>
-    </div> -->
+    <div class="text-center space-y-3">
+        <h2 class="text-3xl sm:text-4xl font-black tracking-tight text-white dark-mode-text bg-gradient-to-r from-emerald-400 to-teal-500 bg-clip-text text-transparent">
+            ส่งรูปภาพ
+        </h2>
+        <p class="text-zinc-400 text-sm sm:text-base font-medium max-w-md mx-auto leading-relaxed">
+            กรอกข้อมูลสั้นๆ และอัปโหลดภาพของคุณใน 3 ขั้นตอนง่ายๆ
+        </p>
+    </div>
 
-    <!-- Main upload glass box -->
-    <div class="glass rounded-3xl p-6 sm:p-8 shadow-2xl relative border border-zinc-800/80 light-card">
-    
-        
-        {#if data.activeCollections.length === 0}
-            <div class="text-center py-12 space-y-4">
-                <div class="p-4 bg-zinc-900/50 border border-zinc-800 rounded-2xl max-w-sm mx-auto">
-                    <p class="text-sm text-zinc-400">ขณะนี้ไม่มีหัวข้อเปิดรับส่งรูปภาพในระบบ</p>
-                    <p class="text-xs text-zinc-500 mt-1">กรุณาติดต่อผู้ดูแลระบบเพื่อสร้างหัวข้อเปิดรับ</p>
+    {#if data.activeCollections.length === 0}
+        <div class="glass rounded-3xl p-8 text-center space-y-4 shadow-2xl border border-zinc-800">
+            <div class="mx-auto w-16 h-16 rounded-full bg-zinc-300/80 dark:bg-zinc-900/80 flex items-center justify-center border border-zinc-805">
+                <ShieldAlert class="w-8 h-8 text-zinc-500" />
+            </div>
+            <div class="space-y-2">
+                <h3 class="text-lg font-bold text-white">ขณะนี้ไม่มีหัวข้อเปิดรับรูปภาพ</h3>
+                <!-- <p class="text-sm text-zinc-400 max-w-xs mx-auto">กรุณาติดต่อผู้ดูแลระบบ</p> -->
+            </div>
+        </div>
+    {:else}
+        <form method="POST" action="?/submitForm" enctype="multipart/form-data" use:enhance={({ formData }) => {
+            if (isSubmitting) return;
+            isSubmitting = true;
+
+            if (compressedFileBlob && currentUploadedFile) {
+                formData.set('file', compressedFileBlob, currentUploadedFile.name);
+                formData.set('original_size', originalSize.toString());
+            }
+            return async ({ update, result }) => {
+                if (result.type === 'success') {
+                    retryCount = 0;
+                    appState.isUploadSuccessModalOpen = true;
+                    resetStudentForm();
+                } else {
+                    // @ts-ignore
+                    const msg: string = result.data?.message || 'ส่งรูปล้มเหลว';
+                    const isNonRetryable = NON_RETRYABLE_MESSAGES.some(k => msg.includes(k));
+
+                    if (!isNonRetryable && retryCount < MAX_RETRIES) {
+                        retryCount++;
+                        isSubmitting = false;
+                        await update();
+                        setTimeout(() => {
+                            const form = document.querySelector<HTMLFormElement>('form[action="?/submitForm"]');
+                            form?.requestSubmit();
+                        }, 1000);
+                        return;
+                    }
+
+                    retryCount = 0;
+                    appState.showToast('เกิดข้อผิดพลาด', msg, 'error');
+                }
+                isSubmitting = false;
+                update();
+            };
+        }} class="space-y-6">
+
+            <!-- STEP 1: Personal Info -->
+            <div class="glass rounded-3xl p-6 sm:p-8 shadow-xl border border-zinc-800/80 relative overflow-hidden group hover:border-zinc-700/80 transition-all duration-300">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none"></div>
+                <div class="flex items-start space-x-4">
+                    <div class="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-bold text-sm">
+                        1
+                    </div>
+                    <div class="flex-1 space-y-4">
+                        <div>
+                            <h3 class="text-lg font-bold text-white leading-6">กรอกข้อมูลผู้ส่งรูปภาพ</h3>
+                            <!-- <p class="text-xs text-zinc-400">กรุณาแจ้งชื่อและกลุ่มเพื่อการเช็คงานที่ถูกต้อง</p> -->
+                        </div>
+                        
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <!-- Name input -->
+                            <div class="space-y-2">
+                                <label for="name" class="block text-sm font-semibold text-zinc-300">ชื่อ - นามสกุล <span class="text-rose-500">*</span></label>
+                                <div class="relative flex items-center focus-within:text-emerald-400 text-zinc-500">
+                                    <span class="absolute left-4 pointer-events-none">
+                                        <User class="w-5 h-5 transition-colors" />
+                                    </span>
+                                    <input 
+                                        type="text" 
+                                        id="name" 
+                                        name="name" 
+                                        bind:value={studentName} 
+                                        required 
+                                        placeholder="พิมพ์ชื่อและนามสกุลที่นี่..."
+                                        class="w-full bg-zinc-950/40 border border-zinc-800 rounded-2xl pl-12 pr-4 py-3.5 text-base text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all"
+                                    >
+                                </div>
+                            </div>
+
+                            <!-- Group input -->
+                            <div class="space-y-2">
+                                <label for="group_name" class="block text-sm font-semibold text-zinc-300">กลุ่ม <span class="text-zinc-500 text-xs font-normal">(ไม่ระบุก็ได้)</span></label>
+                                <div class="relative flex items-center focus-within:text-emerald-400 text-zinc-500">
+                                    <span class="absolute left-4 pointer-events-none">
+                                        <Users class="w-5 h-5 transition-colors" />
+                                    </span>
+                                    <input 
+                                        type="text" 
+                                        id="group_name" 
+                                        name="group_name" 
+                                        bind:value={studentGroup} 
+                                        placeholder="เช่น กลุ่ม 1, ทีม A"
+                                        class="w-full bg-zinc-950/40 border border-zinc-800 rounded-2xl pl-12 pr-4 py-3.5 text-base text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all"
+                                    >
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
-        {:else}
-            <form method="POST" action="?/submitForm" enctype="multipart/form-data" use:enhance={({ formData }) => {
-                if (isSubmitting) return;
-                isSubmitting = true;
 
-                if (compressedFileBlob && currentUploadedFile) {
-                    formData.set('file', compressedFileBlob, currentUploadedFile.name);
-                    formData.set('original_size', originalSize.toString());
-                }
-                return async ({ update, result }) => {
-                    if (result.type === 'success') {
-                        retryCount = 0;
-                        appState.isUploadSuccessModalOpen = true;
-                        resetStudentForm();
-                    } else {
-                        // @ts-ignore
-                        const msg: string = result.data?.message || 'ส่งรูปล้มเหลว';
-                        const isNonRetryable = NON_RETRYABLE_MESSAGES.some(k => msg.includes(k));
-
-                        if (!isNonRetryable && retryCount < MAX_RETRIES) {
-                            // Auto-retry after short delay
-                            retryCount++;
-                            isSubmitting = false;
-                            await update();
-                            // Wait 1s then resubmit
-                            setTimeout(() => {
-                                const form = document.querySelector<HTMLFormElement>('form[action="?/submitForm"]');
-                                form?.requestSubmit();
-                            }, 1000);
-                            return;
-                        }
-
-                        retryCount = 0;
-                        appState.showToast('เกิดข้อผิดพลาด', msg, 'error');
-                    }
-                    isSubmitting = false;
-                    update();
-                };
-            }} class="space-y-5">
-                
-                <!-- Personal Info Row -->
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div class="space-y-2">
-                        <label for="name" class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">ชื่อ-นามสกุล <span class="text-rose-500">*</span></label>
-                        <input type="text" id="name" name="name" bind:value={studentName} required placeholder="เช่น สมชาย ใจดี"
-                            class="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all text-sm">
+            <!-- STEP 2: Selection of Category -->
+            <div class="glass rounded-3xl p-6 sm:p-8 shadow-xl border border-zinc-800/80 relative overflow-hidden group hover:border-zinc-700/80 transition-all duration-300">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none"></div>
+                <div class="flex items-start space-x-4">
+                    <div class="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-bold text-sm">
+                        2
                     </div>
-                    <div class="space-y-2">
-                        <label for="group_name" class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">กลุ่ม <span class="text-zinc-600 font-normal normal-case tracking-normal">(ไม่บังคับ)</span></label>
-                        <input type="text" id="group_name" name="group_name" bind:value={studentGroup} placeholder="เช่น กลุ่ม 1, ทีม A (ถ้ามี)"
-                            class="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all text-sm">
-                    </div>
-                </div>
-
-                <!-- Collection select -->
-                <div class="space-y-2">
-                    <div class="block text-sm font-medium" style="color: var(--text-secondary)">
-                        <span>หัวข้อการส่งรูปภาพ / หมวดหมู่ <span class="text-rose-500">*</span></span>
-                    </div>
-                    <!-- Hidden input to submit the collection ID -->
-                    <input type="hidden" name="collection_id" value={selectedCollectionId}>
-
-                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                        {#each data.activeCollections as col}
-                            <button 
-                                type="button"
-                                onclick={() => selectCollection(col.id)}
-                                class="collection-btn {selectedCollectionId === col.id ? 'collection-btn--active' : ''}"
-                            >
-                                <span>{col.name}</span>
-                            </button>
-                        {/each}
-                    </div>
-                </div>
-
-                <!-- Uploader Drag & Drop -->
-                <div class="space-y-2">
-                    <div class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">อัปโหลดไฟล์รูปภาพ <span class="text-rose-500">*</span></div>
-                    
-                    {#if !previewUrl}
-                        <!-- svelte-ignore a11y_no_static_element_interactions -->
-                        <div 
-                            ondragover={e => { e.preventDefault(); isDragging = true; }}
-                            ondragleave={() => isDragging = false}
-                            ondrop={async e => { e.preventDefault(); isDragging = false; if (e.dataTransfer?.files?.length) await processFile(e.dataTransfer.files[0]); }}
-                            class="upload-zone {isDragging ? 'upload-zone--dragging' : ''}"
-                        >
-                            <input type="file" accept="image/*" onchange={handleFileSelect} class="absolute inset-0 opacity-0 cursor-pointer z-10">
-                            <div class="space-y-3">
-                                <div class="upload-icon-wrap mx-auto">
-                                    <Upload class="w-5 h-5" />
-                                </div>
-                                <div>
-                                    <p class="text-sm font-semibold" style="color: var(--text-primary)">ลากและวางรูปภาพที่นี่ หรือคลิกเพื่อเลือกไฟล์</p>
-                                    <p class="text-xs mt-1" style="color: var(--text-muted)">รองรับ JPG, PNG, AVIF, WebP (จำกัดสูงสุด 15MB ต่อไฟล์)</p>
-                                </div>
-                            </div>
+                    <div class="flex-1 space-y-4 flex flex-col">
+                        <div>
+                            <h3 class="text-lg font-bold text-white leading-6">เลือกหัวข้อส่งงาน <span class="text-rose-500">*</span></h3>
+                            <p class="text-xs text-zinc-400">กดเลือกหัวข้อหรือกิจกรรมที่ต้องการส่งรูปภาพ</p>
                         </div>
-                    {:else}
-                        <!-- Preview Thumbnail -->
-                        <div class="w-full space-y-4 text-center">
-                            <div class="relative inline-block max-w-[200px] rounded-xl overflow-hidden shadow-lg border border-zinc-700 group">
-                                <button type="button" onclick={() => isStudentLightboxOpen = true} class="focus:outline-none w-full h-full block" title="คลิกเพื่อดูรูปขนาดเต็ม">
-                                    <img src={previewUrl} alt="Preview" class="h-32 w-auto object-cover mx-auto cursor-pointer">
+                        
+                        <!-- Hidden input to submit the collection ID -->
+                        <input type="hidden" name="collection_id" value={selectedCollectionId}>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+                            {#each data.activeCollections as col}
+                                {@const isSelected = selectedCollectionId === col.id}
+                                {@const isOver = overQuotaCollections.some(o => o.id === col.id)}
+                                {@const isNear = nearQuotaCollections.some(n => n.id === col.id)}
+                                <button 
+                                    type="button"
+                                    onclick={() => selectCollection(col.id)}
+                                    disabled={isOver}
+                                    class="relative flex items-center justify-between p-4 rounded-2xl border text-left transition-all duration-200 select-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed
+                                        {isSelected 
+                                            ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400 ring-2 ring-emerald-500/20' 
+                                            : 'bg-zinc-50 border-zinc-200 text-zinc-700 hover:bg-zinc-100/50 hover:border-zinc-300 dark:bg-zinc-950/40 dark:border-zinc-800 dark:hover:border-zinc-700 dark:text-zinc-300'}"
+                                >
+                                    <div class="space-y-1 pr-6 flex-1">
+                                        <div class="font-bold text-base flex items-center gap-1.5 truncate">
+                                            <span>{col.name}</span>
+                                            {#if isSelected}
+                                                <Check class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                                            {/if}
+                                        </div>
+                                        <div class="text-xs text-zinc-500">
+                                            {#if isOver}
+                                                <span class="text-rose-400 font-semibold">เต็มโควต้าแล้ว</span>
+                                            {:else if isNear}
+                                                <span class="text-amber-400 font-semibold">ใกล้เต็มโควต้า</span>
+                                            {:else}
+                                                <span>หัวข้อส่งงานทั่วไป</span>
+                                            {/if}
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="w-5 h-5 rounded-full border flex items-center justify-center shrink-0
+                                        {isSelected 
+                                            ? 'border-emerald-500 bg-emerald-500 text-white' 
+                                            : 'border-zinc-700 bg-transparent text-transparent'}"
+                                    >
+                                        {#if isSelected}
+                                            <Check class="w-3.5 h-3.5 stroke-[3]" />
+                                        {/if}
+                                    </div>
                                 </button>
-                                <button type="button" onclick={resetFile} class="absolute top-1.5 right-1.5 bg-zinc-950/80 hover:bg-rose-600 text-white rounded-full p-1.5 transition-colors z-20">
-                                    <X class="w-4 h-4" />
-                                </button>
-                                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity pointer-events-none z-10">
-                                    <Eye class="w-6 h-6 text-white" />
+                            {/each}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- STEP 3: Upload/Capture Photo -->
+            <div class="glass rounded-3xl p-6 sm:p-8 shadow-xl border border-zinc-800/80 relative overflow-hidden group hover:border-zinc-700/80 transition-all duration-300">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none"></div>
+                <div class="flex items-start space-x-4">
+                    <div class="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-bold text-sm">
+                        3
+                    </div>
+                    <div class="flex-1 space-y-4">
+                        <div>
+                            <h3 class="text-lg font-bold text-white leading-6">เลือกรูปภาพ หรือ ถ่ายรูป <span class="text-rose-500">*</span></h3>
+                            <p class="text-xs text-zinc-400">อัปโหลดภาพไม่เกิน 15MB</p>
+                        </div>
+                        
+                        {#if !previewUrl}
+                            <!-- svelte-ignore a11y_no_static_element_interactions -->
+                            <div 
+                                ondragover={e => { e.preventDefault(); isDragging = true; }}
+                                ondragleave={() => isDragging = false}
+                                ondrop={async e => { e.preventDefault(); isDragging = false; if (e.dataTransfer?.files?.length) await processFile(e.dataTransfer.files[0]); }}
+                                class="relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-200 min-h-[160px] flex flex-col items-center justify-center space-y-4
+                                    {isDragging 
+                                        ? 'border-emerald-500 bg-emerald-500/5' 
+                                        : 'border-zinc-200 bg-zinc-50 hover:border-emerald-400 hover:bg-emerald-50/50 dark:border-zinc-800 dark:bg-zinc-950/20 dark:hover:border-emerald-500/60 dark:hover:bg-emerald-500/[0.01]'}"
+                            >
+                                <input type="file" accept="image/*" onchange={handleFileSelect} class="absolute inset-0 opacity-0 cursor-pointer z-10">
+                                
+                                <div class="w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 flex items-center justify-center text-zinc-500 dark:text-zinc-400 group-hover:text-emerald-500 dark:group-hover:text-emerald-400 group-hover:border-emerald-400 dark:group-hover:border-emerald-500/40 transition-colors">
+                                    <Camera class="w-8 h-8" />
+                                </div>
+                                <div class="space-y-1">
+                                    <p class="text-base font-bold text-white leading-5">กดตรงนี้เพื่อเลือกรูปภาพ</p>
+                                    <p class="text-xs text-zinc-500">สามารถลากรูปภาพมาวางได้เช่นกัน (JPG, PNG, AVIF, WebP)</p>
                                 </div>
                             </div>
+                        {:else}
+                            <!-- Preview Image Container -->
+                            <div class="space-y-4 text-center">
+                                <div class="relative inline-block rounded-2xl overflow-hidden shadow-2xl border border-zinc-700 bg-zinc-950/80 p-1 group">
+                                    <button type="button" onclick={() => isStudentLightboxOpen = true} class="focus:outline-none block w-full h-full rounded-xl overflow-hidden" title="คลิกเพื่อดูรูปขนาดเต็ม">
+                                        <img src={previewUrl} alt="Preview" class="max-h-56 w-auto object-contain mx-auto rounded-xl transition-transform duration-300 group-hover:scale-[1.02]">
+                                    </button>
+                                    
+                                    <button 
+                                        type="button" 
+                                        onclick={resetFile} 
+                                        class="absolute top-3 right-3 bg-zinc-950/90 hover:bg-rose-600 text-white rounded-full p-2.5 transition-colors z-20 shadow-lg border border-zinc-800"
+                                        style="color: #ffffff !important;"
+                                        title="ลบและเลือกรูปใหม่"
+                                    >
+                                        <X class="w-4 h-4" />
+                                    </button>
+                                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity pointer-events-none z-10 rounded-xl">
+                                        <Eye class="w-8 h-8 text-white drop-shadow-md" />
+                                    </div>
+                                </div>
 
-                            <!-- Processing Details -->
-                            <div class="file-status-box max-w-md mx-auto text-left space-y-2 text-xs">
-                                <div class="flex justify-between items-center" style="color: var(--text-secondary)">
-                                    <span>สถานะไฟล์:</span>
-                                    {#if compressionStatus === 'compressing'}
-                                        <span class="text-brand-400 font-medium flex items-center">
-                                            <Loader class="w-3.5 h-3.5 mr-1 animate-spin text-brand-500" /> กำลังตรวจสอบคุณภาพไฟล์...
-                                        </span>
-                                    {:else if compressionStatus === 'done'}
-                                        {#if originalSize <= 2.5 * 1024 * 1024}
-                                            <span class="text-emerald-500 font-medium flex items-center">
-                                                <CircleCheck class="w-3.5 h-3.5 mr-1" /> ตรวจสอบแล้ว (ขนาดต้นฉบับ)
+                                <!-- Compression Quality status indicator -->
+                                <div class="max-w-md mx-auto bg-zinc-950/40 border border-zinc-900 rounded-2xl p-4 space-y-3 text-left">
+                                    <div class="flex justify-between items-center text-sm">
+                                        <span class="text-zinc-400 font-medium">การจัดเตรียมภาพ:</span>
+                                        {#if compressionStatus === 'compressing'}
+                                            <span class="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center animate-pulse">
+                                                <Loader class="w-4 h-4 mr-1.5 animate-spin text-emerald-500" /> กำลังย่อขนาดภาพ...
                                             </span>
+                                        {:else if compressionStatus === 'done'}
+                                            {#if originalSize <= 2.5 * 1024 * 1024}
+                                                <span class="text-emerald-500 font-semibold flex items-center">
+                                                    <CircleCheck class="w-4 h-4 mr-1.5 shrink-0" /> รูปภาพพร้อมส่ง (ขนาดเดิม)
+                                                </span>
+                                            {:else}
+                                                <span class="text-emerald-500 font-semibold flex items-center">
+                                                    <CircleCheck class="w-4 h-4 mr-1.5 shrink-0" /> ย่อขนาดภาพให้ส่งเร็วขึ้นแล้ว!
+                                                </span>
+                                            {/if}
                                         {:else}
-                                            <span class="text-emerald-500 font-medium flex items-center">
-                                                <CircleCheck class="w-3.5 h-3.5 mr-1" /> บีบอัดแล้ว
+                                            <span class="text-rose-500 font-semibold flex items-center">
+                                                <X class="w-4 h-4 mr-1.5 shrink-0" /> เกิดข้อผิดพลาด (ใช้ขนาดเดิม)
                                             </span>
                                         {/if}
-                                    {:else}
-                                        <span class="text-rose-500 font-medium flex items-center">
-                                            <X class="w-3.5 h-3.5 mr-1" /> ตรวจสอบล้มเหลว (ใช้ไฟล์จริง)
-                                        </span>
-                                    {/if}
-                                </div>
-                                <div class="h-1.5 rounded-full overflow-hidden" style="background: var(--divider)">
-                                    <div class="h-full bg-emerald-500 transition-all duration-500" style="width: {compressionProgress}%;"></div>
+                                    </div>
+                                    <div class="h-2 rounded-full bg-zinc-900 overflow-hidden">
+                                        <div class="h-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-300" style="width: {compressionProgress}%;"></div>
+                                    </div>
+                                    <div class="flex justify-between text-xs text-zinc-500">
+                                        <span>ขนาดเดิม: {formatBytes(originalSize)}</span>
+                                        {#if compressionStatus === 'done' && compressedFileBlob}
+                                            <span class="text-emerald-500/80">ขนาดใหม่: {formatBytes(compressedFileBlob.size)}</span>
+                                        {/if}
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    {/if}
+                        {/if}
+                    </div>
                 </div>
+            </div>
 
-                <!-- Submit Button with quota alert block -->
+            <!-- STEP 4: Submit section -->
+            <div class="pt-2">
                 {#if overQuotaCollections.some(c => c.id === selectedCollectionId)}
-                    <div class="w-full flex items-center gap-2 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-semibold mt-4">
-                        <ShieldAlert class="w-4 h-4 shrink-0" />
-                        <span>หัวข้อนี้ถึงขีดจำกัดการรับส่งแล้ว ({selectedColLimit} รูป) กรุณาติดต่อผู้ดูแลระบบ</span>
+                    <div class="w-full flex items-center gap-3 p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-sm font-semibold">
+                        <ShieldAlert class="w-5 h-5 shrink-0" />
+                        <span>ขออภัย หัวข้อนี้ส่งงานครบตามโควต้าแล้ว ({selectedColLimit} รูป) กรุณาติดต่อผู้ดูแล</span>
                     </div>
                 {:else}
                     {#if nearQuotaCollections.some(c => c.id === selectedCollectionId)}
-                        <div class="w-full flex items-center gap-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs mt-4">
-                            <ShieldAlert class="w-4 h-4 shrink-0" />
-                            <span>หัวข้อนี้ใกล้เต็มแล้ว (รับได้อีกไม่มาก)</span>
+                        <div class="w-full flex items-center gap-3 p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-sm mb-4">
+                            <ShieldAlert class="w-5 h-5 shrink-0" />
+                            <span>ประกาศ: หัวข้อส่งงานนี้ใกล้เต็มแล้ว</span>
                         </div>
                     {/if}
-                    <button type="submit" 
+
+                    <button 
+                        type="submit" 
                         disabled={isSubmitting || compressionStatus === 'compressing' || !studentName || !previewUrl || !selectedCollectionId}
-                        class="w-full bg-brand-600 hover:bg-brand-700 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-white font-medium py-3 rounded-xl shadow-lg shadow-brand-500/10 hover:shadow-brand-600/20 transition-all duration-300 flex items-center justify-center space-x-2 text-sm mt-4">
+                        class="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700  font-bold py-4 px-6 rounded-2xl shadow-xl shadow-emerald-500/10 hover:shadow-emerald-500/20 transition-all duration-300 flex items-center justify-center space-x-2 text-base md:text-lg border border-emerald-400/20 select-none cursor-pointer disabled:bg-zinc-200 disabled:bg-none disabled:text-gray-400 disabled:border-zinc-500 disabled:shadow-none disabled:cursor-not-allowed dark:disabled:bg-zinc-950 dark:disabled:bg-none dark:disabled:text-zinc-600 dark:disabled:border-zinc-800"
+                    >
                         {#if isSubmitting}
-                            <Loader class="w-4 h-4 animate-spin" />
-                            <span>{retryCount > 0 ? `กำลังลองใหม่ (${retryCount}/${MAX_RETRIES})...` : 'กำลังอัปโหลด...'}</span>
+                            <Loader class="w-5 h-5 animate-spin" />
+                            <span>{retryCount > 0 ? `กำลังส่งอีกครั้ง (${retryCount}/${MAX_RETRIES})...` : 'กำลังอัปโหลด...'}</span>
                         {:else}
-                            <Send class="w-4 h-4" />
+                            <Send class="w-5 h-5" />
                             <span>บันทึกและส่งรูปภาพ</span>
                         {/if}
                     </button>
                 {/if}
-            </form>
-        {/if}
-    </div>
+            </div>
+        </form>
+    {/if}
 </section>
 
 <!-- Student Lightbox modal for previewing image -->
@@ -380,7 +495,7 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/90 backdrop-blur-sm" onclick={() => isStudentLightboxOpen = false}>
+    <div class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95 backdrop-blur-sm" onclick={() => isStudentLightboxOpen = false}>
         <button onclick={() => isStudentLightboxOpen = false} class="absolute top-4 right-4 text-zinc-400 hover:text-white p-2.5 z-50 transition-colors" title="ปิด">
             <X class="w-6 h-6" />
         </button>
@@ -412,7 +527,7 @@
             
             <div class="space-y-2">
                 <h3 class="text-xl font-bold text-white">ส่งรูปภาพสำเร็จ!</h3>
-                <p class="text-zinc-400 text-xs sm:text-sm">รูปภาพผลงานของคุณถูกบันทึกเข้าระบบชั่วคราวอย่างปลอดภัยแล้ว</p>
+                <p class="text-zinc-400 text-xs sm:text-sm">รูปภาพผลงานของคุณถูกบันทึกเข้าระบบเรียบร้อยแล้ว</p>
             </div>
             
             <button onclick={closeSuccessModal} 
@@ -422,3 +537,4 @@
         </div>
     </div>
 {/if}
+

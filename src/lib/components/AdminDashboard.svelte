@@ -82,6 +82,14 @@
     let confirmAction = $state<(() => void) | null>(null);
     let confirmTheme = $state<'danger' | 'success' | 'info'>('danger');
 
+    // User management states
+    let isUserManagementOpen = $state(false);
+    let createUsername = $state('');
+    let createPassword = $state('');
+    let createRole = $state<'admin' | 'staff'>('staff');
+    let changePasswordUsername = $state('');
+    let changePasswordNewPassword = $state('');
+
     function showConfirm(title: string, message: string, action: () => void, theme: 'danger' | 'success' | 'info' = 'danger') {
         confirmTitle = title;
         confirmMessage = message;
@@ -567,13 +575,13 @@
 <section class="space-y-6 w-full animate-fade-in">
     <!-- Admin title & buttons -->
     <div class="flex flex-col md:flex-row md:items-center md:justify-between border-b border-zinc-800 pb-5 gap-4">
-        <div>
+        <!-- <div>
             <h2 class="text-2xl font-bold tracking-tight text-white flex items-center space-x-2">
                 <span>Dashboard</span>
             </h2>
             <p class="text-zinc-400 text-sm mt-1">บริหารจัดการหัวข้อเปิดรับรูปภาพ และดาวน์โหลดรูปภาพที่ส่งเข้ามาใน format ZIP สำหรับการประเมินผล</p>
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
+        </div> -->
+        <div class="flex flex-wrap justify-center w-full items-center gap-2">
             <button onclick={reloadData} disabled={isReloading} class="bg-zinc-900 border border-zinc-700 hover:border-brand-500 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center space-x-2 disabled:opacity-50 disabled:pointer-events-none">
                 <RefreshCw class="w-4 h-4 text-emerald-400 {isReloading ? 'animate-spin' : ''}" />
                 <span>{isReloading ? 'กำลังดึงข้อมูล...' : 'รีโหลดข้อมูล'}</span>
@@ -590,26 +598,60 @@
                 <Download class="w-4 h-4" />
                 <span>ดาวน์โหลด ZIP</span>
             </button>
+            {#if data.userRole === 'admin'}
+                <button onclick={() => isUserManagementOpen = true} class="bg-violet-300 hover:bg-violet-500 dark:bg-violet-400 hover:dark:bg-violet-600 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center space-x-2 shadow-lg shadow-violet-600/10 animate-none">
+                    <User class="w-4 h-4" />
+                    <span>จัดการผู้ใช้</span>
+                </button>
+            {/if}
 
              <!-- Backup to R2 -->
             {#if data.userRole === 'admin' || data.userRole === 'staff'}
-                <form method="POST" action="?/backupToCloudflare" use:enhance={() => {
-                    isBackingUp = true;
-                    return async ({ result, update }) => {
-                        isBackingUp = false;
-                        if (result.type === 'success') {
-                            showToast('Backup สำเร็จ', (result.data as any)?.message ?? 'สำรองข้อมูล R2 เรียบร้อย', 'success');
-                        } else if (result.type === 'failure') {
-                            showToast('Backup ล้มเหลว', (result.data as any)?.message ?? 'เกิดข้อผิดพลาด', 'error');
-                        }
-                        await update();
-                    };
-                }}>
-                    <button type="button" onclick={(e) => { const form = e.currentTarget.closest('form'); showConfirm('สำรองข้อมูล R2', 'คุณต้องการสำรองข้อมูลรูปภาพและชีตทังหมดขึ้น R2 ใช่หรือไม่?', () => form?.requestSubmit(), 'info'); }} disabled={isBackingUp} class="bg-zinc-900 border border-zinc-700 hover:border-amber-500 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center space-x-2 disabled:opacity-50">
-                        <CloudUpload class="w-4 h-4 text-amber-400 {isBackingUp ? 'animate-pulse' : ''}" />
-                        <span>{isBackingUp ? 'กำลัง Backup...' : 'Backup'}</span>
-                    </button>
-                </form>
+                <div class="flex items-center gap-2">
+                    <form method="POST" action="?/backupToCloudflare" use:enhance={() => {
+                        isBackingUp = true;
+                        return async ({ result, update }) => {
+                            isBackingUp = false;
+                            if (result.type === 'success') {
+                                showToast('Backup สำเร็จ', (result.data as any)?.message ?? 'สำรองข้อมูล R2 เรียบร้อย', 'success');
+                            } else if (result.type === 'failure') {
+                                showToast('Backup ล้มเหลว', (result.data as any)?.message ?? 'เกิดข้อผิดพลาด', 'error');
+                            }
+                            await update();
+                        };
+                    }}>
+                        <button type="button" onclick={(e) => { const form = e.currentTarget.closest('form'); showConfirm('สำรองข้อมูล R2', 'คุณต้องการสำรองข้อมูลรูปภาพและชีตทังหมดขึ้น R2 ใช่หรือไม่?', () => form?.requestSubmit(), 'info'); }} disabled={isBackingUp} class="bg-zinc-900 border border-zinc-700 hover:border-amber-500 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center space-x-2 disabled:opacity-50">
+                            <CloudUpload class="w-4 h-4 text-amber-400 {isBackingUp ? 'animate-pulse' : ''}" />
+                            <span>{isBackingUp ? 'กำลัง Backup...' : 'Backup'}</span>
+                        </button>
+                    </form>
+
+                    <form method="POST" action="?/importBackupJson" enctype="multipart/form-data" use:enhance={() => {
+                        startProcessing('กำลังนำเข้าข้อมูลสำรองจากไฟล์ JSON...');
+                        return async ({ result, update }) => {
+                            stopProcessing();
+                            if (result.type === 'success') {
+                                showToast('นำเข้าสำเร็จ', (result.data as any)?.message ?? 'นำเข้าข้อมูลสำรองเรียบร้อยแล้ว', 'success');
+                            } else {
+                                // @ts-ignore
+                                showToast('นำเข้าล้มเหลว', result.data?.message || 'การกู้คืนข้อมูลล้มเหลว', 'error');
+                            }
+                            await update();
+                        };
+                    }}>
+                        <input type="file" id="import-backup-file" name="backup_file" accept=".json" class="hidden" onchange={(e) => {
+                            const file = (e.currentTarget as HTMLInputElement).files?.[0];
+                            if (file) {
+                                const form = e.currentTarget.closest('form');
+                                showConfirm('นำเข้าข้อมูลสำรอง', `คุณต้องการนำเข้าข้อมูลสำรองจากไฟล์ "${file.name}" ใช่หรือไม่? ข้อมูลเดิมจะถูกเขียนทับด้วยข้อมูลในไฟล์นี้`, () => form?.requestSubmit(), 'success');
+                            }
+                        }}>
+                        <button type="button" onclick={() => document.getElementById('import-backup-file')?.click()} class="bg-zinc-900 border border-zinc-700 hover:border-violet-500 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center space-x-2">
+                            <FolderGit2 class="w-4 h-4 text-violet-400" />
+                            <span>นำเข้าสำรองข้อมูล</span>
+                        </button>
+                    </form>
+                </div>
             {/if}
 
             <form method="POST" action="?/logout" use:enhance={() => {
@@ -668,7 +710,7 @@
                     <div class="space-y-2 max-h-[300px] overflow-y-auto pr-1">
                         {#each activeCollections as col (col.id)}
                             {@const count = data.submissions.filter((s: any) => s.collection_id === col.id && !s.is_deleted).length}
-                            <div class="flex flex-col p-3 rounded-xl border border-zinc-800 bg-zinc-900/30 hover:bg-zinc-850/20 transition-all gap-2">
+                            <div class="flex flex-col p-3 rounded-xl border border-zinc-800 bg-zinc-900/30 hover:bg-zinc-800/20 transition-all gap-2">
                                 {#if editingLimitId === col.id}
                                     <form method="POST" action="?/updateCollectionLimit" class="space-y-2 w-full" use:enhance={() => {
                                         return async ({ result, update }) => {
@@ -693,7 +735,7 @@
                                                 name="limit"
                                                 bind:value={editingLimitValue}
                                                 min="1"
-                                                class="flex-1 text-xs bg-zinc-850 border border-zinc-700 rounded-lg px-2 py-1 text-zinc-200 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                                                class="flex-1 text-xs bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1 text-zinc-200 focus:outline-none focus:ring-1 focus:ring-brand-500"
                                             />
                                             <button type="submit" class="px-2.5 py-1 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-[10px] font-semibold transition-colors">บันทึก</button>
                                         </div>
@@ -712,7 +754,7 @@
                                     </div>
                                     
                                     <!-- Visual quota progress bar -->
-                                    <div class="w-full bg-zinc-850 rounded-full h-1">
+                                    <div class="w-full bg-zinc-900/15 dark:bg-zinc-800 rounded-full h-1">
                                         <div class="h-1 rounded-full {count >= col.submission_limit ? 'bg-rose-500' : (count >= col.submission_limit * 0.9 ? 'bg-amber-500' : 'bg-brand-500')}"
                                             style="width: {Math.min(100, (count / col.submission_limit) * 100)}%"></div>
                                     </div>
@@ -819,12 +861,12 @@
         <div class="{isCollectionsPanelOpen ? 'lg:col-span-2' : 'lg:col-span-3'} space-y-4 transition-all duration-300">
             <div class="glass rounded-2xl border border-zinc-800 overflow-hidden flex flex-col min-h-[480px]">
                 <!-- Header bar -->
-                <div class="bg-zinc-900/95 border-b border-zinc-850 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs">
+                <div class="bg-zinc-900/95 border-b border-zinc-800 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs">
                     <div class="flex items-center space-x-2.5">
-                        <button onclick={navigateUp} disabled={currentExplorerPath.length === 0} class="p-2 bg-zinc-950 border border-zinc-855 rounded hover:bg-zinc-800/80 transition-all text-zinc-400 disabled:opacity-30 disabled:pointer-events-none" title="ขึ้นไปโฟลเดอร์เดิม">
+                        <button onclick={navigateUp} disabled={currentExplorerPath.length === 0} class="p-2 bg-zinc-950 border border-zinc-800 rounded hover:bg-zinc-800/80 transition-all text-zinc-400 disabled:opacity-30 disabled:pointer-events-none" title="ขึ้นไปโฟลเดอร์เดิม">
                             <ArrowUp class="w-4 h-4" />
                         </button>
-                        <button onclick={() => navigateToPath([])} class="p-2 bg-zinc-950 border border-zinc-855 rounded hover:bg-zinc-800/80 transition-all text-zinc-400" title="หน้าแรก">
+                        <button onclick={() => navigateToPath([])} class="p-2 bg-zinc-950 border border-zinc-800 rounded hover:bg-zinc-800/80 transition-all text-zinc-400" title="หน้าแรก">
                             <Home class="w-4 h-4" />
                         </button>
                         <span class="font-bold text-zinc-300 font-sans tracking-wide truncate" id="explorer-window-title">
@@ -834,14 +876,14 @@
 
                     <div class="flex items-center space-x-2">
                         <div class="relative flex-1 sm:w-44">
-                            <input type="text" bind:value={searchExplorerQuery} placeholder="ค้นหาในโฟลเดอร์นี้..." class="w-full bg-zinc-950 border border-zinc-855 rounded px-2.5 pl-8 py-2 text-zinc-300 placeholder-zinc-650 focus:outline-none focus:border-brand-500 font-sans">
+                            <input type="text" bind:value={searchExplorerQuery} placeholder="ค้นหาในโฟลเดอร์นี้..." class="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 pl-8 py-2 text-zinc-300 placeholder-zinc-650 focus:outline-none focus:border-brand-500 font-sans">
                             <div class="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-zinc-650">
                                 <Search class="w-3.5 h-3.5" />
                             </div>
                         </div>
 
-                        {#if data.username === 'guyssar' && hasVisibleFiles}
-                            <button type="button" onclick={toggleSelectAll} class="p-2 bg-zinc-950 border border-zinc-855 rounded hover:bg-zinc-800/80 transition-all text-zinc-400 flex items-center space-x-1.5 text-xs font-sans" title={isAllSelected ? "ยกเลิกการเลือกทั้งหมด" : "เลือกทั้งหมด"}>
+                        {#if data.username?.toLowerCase() === 'guyssar' && hasVisibleFiles}
+                            <button type="button" onclick={toggleSelectAll} class="p-2 bg-zinc-950 border border-zinc-800 rounded hover:bg-zinc-800/80 transition-all text-zinc-400 flex items-center space-x-1.5 text-xs font-sans" title={isAllSelected ? "ยกเลิกการเลือกทั้งหมด" : "เลือกทั้งหมด"}>
                                 <CheckSquare class="w-4 h-4 {isAllSelected ? 'text-emerald-400' : ''}" />
                                 <span class="hidden md:inline">{isAllSelected ? "ยกเลิกเลือก" : "เลือกทั้งหมด"}</span>
                             </button>
@@ -868,7 +910,7 @@
                                         </button>
                                     </form>
 
-                                    {#if data.username === 'guyssar'}
+                                    {#if data.username?.toLowerCase() === 'guyssar'}
                                         <form method="POST" action="?/deleteSubmissionsPermanently" use:enhance={() => {
                                             startProcessing('กำลังลบรูปภาพที่เลือกออกจาก R2 และระบบอย่างถาวร...');
                                             return async ({ result, update }) => {
@@ -912,9 +954,9 @@
                 <!-- Grid content -->
                 <div class="flex-1 flex overflow-hidden">
                     <!-- Sidebar tree -->
-                    <div class="w-48 border-r border-zinc-855 bg-zinc-900/10 p-3.5 overflow-y-auto hidden sm:block select-none text-xs text-zinc-400 space-y-2">
+                    <div class="w-48 border-r border-zinc-800 bg-zinc-900/10 p-3.5 overflow-y-auto hidden sm:block select-none text-xs text-zinc-400 space-y-2">
                         <div class="font-semibold text-[10px] text-zinc-500 uppercase tracking-wider mb-2">โครงสร้างไดเรกทอรี</div>
-                        <button onclick={() => navigateToPath([])} class="flex items-center space-x-2 py-1 px-1.5 w-full rounded hover:bg-zinc-850 hover:text-white transition-all {currentExplorerPath.length === 0 ? 'bg-zinc-850 text-white font-medium' : ''}">
+                        <button onclick={() => navigateToPath([])} class="flex items-center space-x-2 py-1 px-1.5 w-full rounded hover:bg-zinc-800 hover:text-white transition-all {currentExplorerPath.length === 0 ? 'bg-zinc-800 text-white font-medium' : ''}">
                             <HardDrive class="w-3.5 h-3.5 text-zinc-500" />
                             <span class="truncate">Root /</span>
                         </button>
@@ -923,7 +965,7 @@
                             {@const groups = [...new Set<string>(colSubmissions.map((s: any) => s.group_name))]}
                             {@const isExpanded = expandedCollections[col.id] !== undefined ? expandedCollections[col.id] : (currentExplorerPath[0] === col.name)}
                             <div class="space-y-1">
-                                <div class="flex items-center w-full rounded hover:bg-zinc-850 hover:text-white transition-all group/item {currentExplorerPath.length === 1 && currentExplorerPath[0] === col.name ? 'bg-zinc-850 text-white font-medium' : ''}">
+                                <div class="flex items-center w-full rounded hover:bg-zinc-800 hover:text-white transition-all group/item {currentExplorerPath.length === 1 && currentExplorerPath[0] === col.name ? 'bg-zinc-800 text-white font-medium' : ''}">
                                     <button onclick={() => toggleCollectionExpand(col.id)} class="p-1.5 text-zinc-500 hover:text-zinc-300 focus:outline-none shrink-0">
                                         {#if isExpanded}
                                             <ChevronDown class="w-3 h-3" />
@@ -937,9 +979,9 @@
                                     </button>
                                 </div>
                                 {#if isExpanded && groups.length > 0}
-                                    <div class="pl-4.5 space-y-1 border-l border-zinc-850 ml-5 my-1">
+                                    <div class="pl-4.5 space-y-1 border-l border-zinc-800 ml-5 my-1">
                                         {#each groups as gp}
-                                            <button onclick={() => navigateToPath([col.name, gp])} class="flex items-center space-x-2 py-0.5 px-1.5 w-full rounded hover:bg-zinc-850 hover:text-white transition-all text-[10px] {currentExplorerPath.length === 2 && currentExplorerPath[0] === col.name && currentExplorerPath[1] === gp ? 'bg-zinc-850 text-white font-semibold' : 'text-zinc-500'}">
+                                            <button onclick={() => navigateToPath([col.name, gp])} class="flex items-center space-x-2 py-0.5 px-1.5 w-full rounded hover:bg-zinc-800 hover:text-white transition-all text-[10px] {currentExplorerPath.length === 2 && currentExplorerPath[0] === col.name && currentExplorerPath[1] === gp ? 'bg-zinc-800 text-white font-semibold' : 'text-zinc-500'}">
                                                 <Folder class="w-3 h-3 text-brand-500 shrink-0" />
                                                 <span class="truncate">{gp}</span>
                                             </button>
@@ -962,8 +1004,8 @@
                                 {#if it.type === 'folder'}
                                     <!-- svelte-ignore a11y_click_events_have_key_events -->
                                     <!-- svelte-ignore a11y_no_static_element_interactions -->
-                                    <div onclick={it.onClick} class="flex flex-col items-center p-4 rounded-xl border border-zinc-900 bg-zinc-900/30 hover:bg-zinc-850/20 hover:border-zinc-800 cursor-pointer select-none text-center transition-all group relative w-[130px] shrink-0">
-                                        <button onclick={(e) => downloadFolderZipDirect(it.name, e)} class="absolute top-2 right-2 p-1.5 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-850/80 rounded bg-zinc-950/40 opacity-0 group-hover:opacity-100 transition-all z-20" title="ดาวน์โหลดโดยตรงนี้ (.zip)">
+                                    <div onclick={it.onClick} class="flex flex-col items-center p-4 rounded-xl border border-zinc-900 bg-zinc-900/30 hover:bg-zinc-800/20 hover:border-zinc-800 cursor-pointer select-none text-center transition-all group relative w-[130px] shrink-0">
+                                        <button onclick={(e) => downloadFolderZipDirect(it.name, e)} class="absolute top-2 right-2 p-1.5 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800/80 rounded bg-zinc-950/40 opacity-0 group-hover:opacity-100 transition-all z-20" title="ดาวน์โหลดโดยตรงนี้ (.zip)">
                                             <Download class="w-3.5 h-3.5" />
                                         </button>
                                         <div class="p-2 relative">
@@ -975,7 +1017,7 @@
                                 {:else}
                                     <!-- svelte-ignore a11y_click_events_have_key_events -->
                                     <!-- svelte-ignore a11y_no_static_element_interactions -->
-                                    <div onclick={() => openAdminLightbox(it.id)} class="flex flex-col rounded-xl overflow-hidden border cursor-pointer select-none transition-all group relative w-[130px] shrink-0 {selectedExplorerIds.has(it.id) ? 'border-brand-500 bg-brand-500/10' : 'border-zinc-900 bg-zinc-900/30 hover:bg-zinc-850/20 hover:border-zinc-800'}">
+                                    <div onclick={() => openAdminLightbox(it.id)} class="flex flex-col rounded-xl overflow-hidden border cursor-pointer select-none transition-all group relative w-[130px] shrink-0 {selectedExplorerIds.has(it.id) ? 'border-brand-500 bg-brand-500/10' : 'border-zinc-900 bg-zinc-900/30 hover:bg-zinc-800/20 hover:border-zinc-800'}">
                                         <div class="h-24 bg-zinc-950/80 flex items-center justify-center overflow-hidden border-b border-zinc-900/80 relative">
                                             <img src={it.img_data} class="object-cover w-full h-full group-hover:scale-105 transition-transform duration-300" alt="Thumbnail">
                                             <button onclick={(e) => toggleSelectFile(it.id, e)} class="absolute top-2 left-2 z-10 p-1 rounded hover:bg-zinc-900/80" title="เลือก">
@@ -1049,16 +1091,16 @@
             <div class="space-y-3">
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <div onclick={() => handleZipDownload('folder')} class="flex items-start p-3 rounded-xl border border-zinc-800 bg-zinc-900/30 hover:bg-zinc-850/30 cursor-pointer transition-all">
+                <div onclick={() => handleZipDownload('folder')} class="flex items-start p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/30 hover:bg-zinc-100 dark:hover:bg-zinc-800/30 cursor-pointer transition-all">
                     <div class="p-2 bg-brand-500/10 rounded-lg text-brand-500 border border-brand-500/20 mr-3 mt-0.5">
                         <Folder class="w-4 h-4" />
                     </div>
                     <div>
-                        <h4 class="text-xs font-bold text-zinc-200">
+                        <h4 class="text-xs font-bold text-zinc-700 dark:text-zinc-200">
                             {#if currentExplorerPath.length === 0}
-                                ดาวน์โหลดเฉพาะที่กำทาง (เลือกไฟล์ก่อน)
+                                ดาวน์โหลดเฉพาะที่นำทาง (เลือกไฟล์ก่อน)
                             {:else if currentExplorerPath.length === 1}
-                                ดาวน์โหลดเฉพาะโดรฟ /{currentExplorerPath[0]}
+                                ดาวน์โหลดเฉพาะไดรฟ์ /{currentExplorerPath[0]}
                             {:else}
                                 ดาวน์โหลดเฉพาะกลุ่ม {currentExplorerPath[1]}
                             {/if}
@@ -1069,13 +1111,13 @@
 
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <div onclick={() => handleZipDownload('all')} class="flex items-start p-3 rounded-xl border border-zinc-800 bg-zinc-900/30 hover:bg-zinc-850/30 cursor-pointer transition-all">
+                <div onclick={() => handleZipDownload('all')} class="flex items-start p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/30 hover:bg-zinc-100 dark:hover:bg-zinc-800/30 cursor-pointer transition-all">
                     <div class="p-2 bg-emerald-500/10 rounded-lg text-emerald-500 border border-emerald-500/20 mr-3 mt-0.5">
                         <HardDrive class="w-4 h-4" />
                     </div>
                     <div>
-                        <h4 class="text-xs font-bold text-zinc-200">ดาวน์โหลดรูปภาพทั้งหมดในระบบ</h4>
-                        <p class="text-[10px] text-zinc-500 mt-1">กีกอัดรูปภาพทุกหัวข้อเปิดรับมา แบ่งเป็นโฟลเดอร์ตามโครงสร้างจริงเป็น JPEG</p>
+                        <h4 class="text-xs font-bold text-zinc-700 dark:text-zinc-200">ดาวน์โหลดรูปภาพทั้งหมดในระบบ</h4>
+                        <p class="text-[10px] text-zinc-500 mt-1">บีบอัดรูปภาพทุกหัวข้อเปิดรับมา แบ่งเป็นโฟลเดอร์ตามโครงสร้างจริงเป็น JPEG</p>
                     </div>
                 </div>
             </div>
@@ -1178,6 +1220,153 @@
                         <span>{Math.round(progressPercent)}%</span>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+{/if}
+
+<!-- Modal: User Management -->
+{#if isUserManagementOpen}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm px-4">
+        <div class="glass max-w-2xl w-full rounded-3xl p-6 shadow-2xl relative border border-zinc-800 flex flex-col max-h-[85vh]">
+            <button onclick={() => isUserManagementOpen = false} class="absolute top-4 right-4 text-zinc-400 hover:text-white p-2 z-10 transition-colors" title="ปิด">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+
+            <div class="flex items-center space-x-2 border-b border-zinc-800 pb-3 mb-4">
+                <User class="w-5 h-5 text-violet-400" />
+                <h3 class="text-base font-bold text-white">จัดการบัญชีผู้ใช้งานระบบ</h3>
+            </div>
+
+            <div class="flex-1 overflow-y-auto space-y-6 pr-1">
+                <!-- Section: Create User -->
+                <div class="bg-zinc-950/40 border border-zinc-900 rounded-2xl p-4 space-y-3">
+                    <h4 class="text-xs font-bold text-zinc-200">สร้างบัญชีผู้ใช้งานใหม่</h4>
+                    <form method="POST" action="?/createUser" use:enhance={() => {
+                        startProcessing('กำลังสร้างบัญชีผู้ใช้งานใหม่...');
+                        return async ({ result, update }) => {
+                            stopProcessing();
+                            if (result.type === 'success') {
+                                showToast('สำเร็จ', 'สร้างบัญชีผู้ใช้เรียบร้อยแล้ว', 'success');
+                                createUsername = '';
+                                createPassword = '';
+                            } else {
+                                // @ts-ignore
+                                showToast('ล้มเหลว', result.data?.message || 'สร้างบัญชีล้มเหลว', 'error');
+                            }
+                            await update();
+                        };
+                    }} class="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+                        <div class="sm:col-span-1 space-y-1">
+                            <label class="text-[10px] font-semibold text-zinc-400 block">
+                                ชื่อผู้ใช้
+                                <input type="text" name="username" bind:value={createUsername} required placeholder="username" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-brand-500 mt-1 font-normal">
+                            </label>
+                        </div>
+                        <div class="sm:col-span-1 space-y-1">
+                            <label class="text-[10px] font-semibold text-zinc-400 block">
+                                รหัสผ่าน
+                                <input type="password" name="password" bind:value={createPassword} required placeholder="••••••••" class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-brand-500 mt-1 font-normal">
+                            </label>
+                        </div>
+                        <div class="sm:col-span-1 space-y-1">
+                            <label class="text-[10px] font-semibold text-zinc-400 block">
+                                บทบาท (Role)
+                                <select name="role" bind:value={createRole} class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-brand-500 mt-1 font-normal">
+                                    <option value="staff">Staff (ผู้ใช้งานทั่วไป)</option>
+                                    <option value="admin">Admin (ผู้ดูแลระบบ)</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="sm:col-span-1">
+                            <button type="submit" class="w-full bg-violet-600 hover:bg-violet-700 text-white font-semibold py-1.5 rounded-lg text-xs transition-colors shadow">สร้างผู้ใช้</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Section: Users List -->
+                <div class="space-y-2">
+                    <h4 class="text-xs font-bold text-zinc-200">รายชื่อบัญชีในระบบ</h4>
+                    <div class="border border-zinc-800 rounded-2xl overflow-hidden divide-y divide-zinc-900">
+                        {#if (data.usersList ?? data.users) && (data.usersList ?? data.users).length > 0}
+                            {#each (data.usersList ?? data.users) as user (user.username)}
+                                <div class="p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs">
+                                    <div class="flex items-center space-x-2.5">
+                                        <div class="w-8 h-8 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400">
+                                            <User class="w-4 h-4" />
+                                        </div>
+                                        <div>
+                                            <div class="flex items-center space-x-1.5">
+                                                <span class="font-bold text-zinc-200">{user.username}</span>
+                                                <span class="text-[9px] px-1.5 py-0.5 rounded font-mono font-bold uppercase {user.role === 'admin' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-brand-500/10 text-brand-400 border border-brand-500/20'}">{user.role}</span>
+                                            </div>
+                                            <p class="text-[9px] text-zinc-500">สร้างเมื่อ: {new Date(user.created_at).toLocaleDateString('th-TH')} {new Date(user.created_at).toLocaleTimeString('th-TH')}</p>
+                                        </div>
+                                    </div>
+
+                                    <div class="flex items-center space-x-2">
+                                        {#if changePasswordUsername === user.username}
+                                            <form method="POST" action="?/changeUserPassword" use:enhance={() => {
+                                                startProcessing('กำลังเปลี่ยนรหัสผ่าน...');
+                                                return async ({ result, update }) => {
+                                                    stopProcessing();
+                                                    if (result.type === 'success') {
+                                                        showToast('สำเร็จ', 'เปลี่ยนรหัสผ่านสำเร็จ', 'success');
+                                                        changePasswordUsername = '';
+                                                        changePasswordNewPassword = '';
+                                                    } else {
+                                                        // @ts-ignore
+                                                        showToast('ล้มเหลว', result.data?.message || 'เปลี่ยนรหัสผ่านล้มเหลว', 'error');
+                                                    }
+                                                    await update();
+                                                };
+                                            }} class="flex items-center gap-1">
+                                                <input type="hidden" name="username" value={user.username}>
+                                                <input type="password" name="password" bind:value={changePasswordNewPassword} required placeholder="รหัสผ่านใหม่" class="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-[10px] text-zinc-200 focus:outline-none focus:border-brand-500 w-28">
+                                                <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white rounded px-2 py-1 text-[10px] font-semibold">บันทึก</button>
+                                                <button type="button" onclick={() => changePasswordUsername = ''} class="text-[10px] text-zinc-500 hover:text-zinc-300 px-1">ยกเลิก</button>
+                                            </form>
+                                        {:else}
+                                            <button type="button" onclick={() => { changePasswordUsername = user.username; changePasswordNewPassword = ''; }} class="bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white px-2 py-1 rounded text-[10px] font-medium flex items-center space-x-1">
+                                                <Lock class="w-3 h-3 text-zinc-500" />
+                                                <span>[Change Password]</span>
+                                            </button>
+                                            
+                                            {#if user.username?.toLowerCase() !== 'guyssar'}
+                                                <form method="POST" action="?/deleteUser" use:enhance={() => {
+                                                    startProcessing('กำลังลบผู้ใช้...');
+                                                    return async ({ result, update }) => {
+                                                        stopProcessing();
+                                                        if (result.type === 'success') {
+                                                            showToast('สำเร็จ', 'ลบบัญชีผู้ใช้งานสำเร็จ', 'success');
+                                                        } else {
+                                                            // @ts-ignore
+                                                            showToast('ล้มเหลว', result.data?.message || 'ลบล้มเหลว', 'error');
+                                                        }
+                                                        await update();
+                                                    };
+                                                }}>
+                                                    <input type="hidden" name="username" value={user.username}>
+                                                    <button type="button" onclick={(e) => { const form = e.currentTarget.closest('form'); showConfirm('ลบผู้ใช้', `คุณต้องการลบผู้ใช้ "${user.username}" หรือไม่?`, () => form?.requestSubmit(), 'danger'); }} class="bg-rose-600/15 border border-rose-500/20 text-rose-400 hover:bg-rose-600 hover:text-white px-2 py-1 rounded text-[10px] font-medium">
+                                                        ลบผู้ใช้
+                                                    </button>
+                                                </form>
+                                            {/if}
+                                        {/if}
+                                    </div>
+                                </div>
+                            {/each}
+                        {:else}
+                            <div class="p-8 text-center text-zinc-500 text-xs">
+                                ไม่มีผู้ใช้งานอื่นในระบบนอกเหนือจากตัวท่าน
+                            </div>
+                        {/if}
+                    </div>
+                </div>
+            </div>
+
+            <div class="border-t border-zinc-800 pt-3 mt-4 flex justify-end">
+                <button onclick={() => isUserManagementOpen = false} class="px-4 py-2 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded-lg hover:bg-zinc-800 text-xs font-semibold">ปิดหน้าต่าง</button>
             </div>
         </div>
     </div>
