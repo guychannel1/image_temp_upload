@@ -359,15 +359,20 @@
     }
 
     // ─── ZIP Download ──────────────────────────────────────────────────────────
-    function getDownloadableImageUrl(imageUrl: string) {
-        if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
-            return `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+    function getDownloadableImageUrl(submission: any) {
+        const imageUrl = submission.img_data || submission.img_url || '';
+        const params = new URLSearchParams();
+        if (submission.file_path) params.set('path', submission.file_path);
+        if (imageUrl) params.set('url', imageUrl);
+
+        if (params.size > 0 && (submission.file_path || imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
+            return `/api/image-proxy?${params.toString()}`;
         }
         return imageUrl;
     }
 
-    async function fetchImageBlob(imageUrl: string): Promise<Blob> {
-        const res = await fetch(getDownloadableImageUrl(imageUrl));
+    async function fetchImageBlob(submission: any): Promise<Blob> {
+        const res = await fetch(getDownloadableImageUrl(submission));
         if (!res.ok) {
             throw new Error(`Image fetch failed: ${res.status}`);
         }
@@ -405,17 +410,30 @@
         }
     }
 
-    async function getZipImageBlob(imageUrl: string): Promise<Blob> {
+    function getOriginalImageExtension(submission: any, blob: Blob) {
+        const contentType = blob.type.toLowerCase();
+        if (contentType.includes('png')) return 'png';
+        if (contentType.includes('webp')) return 'webp';
+        if (contentType.includes('avif')) return 'avif';
+        if (contentType.includes('heic') || contentType.includes('heif')) return 'heic';
+
+        const source = submission.file_path || submission.img_data || submission.img_url || '';
+        const match = source.split('?')[0].match(/\.([a-z0-9]+)$/i);
+        return match?.[1]?.toLowerCase() || 'jpg';
+    }
+
+    async function getZipImageBlob(submission: any): Promise<{ blob: Blob; extension: string }> {
+        const imageUrl = submission.img_data || submission.img_url || '';
         if (imageUrl.startsWith('data:')) {
-            return convertToJpegBlob(imageUrl);
+            return { blob: await convertToJpegBlob(imageUrl), extension: 'jpg' };
         }
 
-        const originalBlob = await fetchImageBlob(imageUrl);
+        const originalBlob = await fetchImageBlob(submission);
         try {
-            return await convertBlobToJpegBlob(originalBlob);
+            return { blob: await convertBlobToJpegBlob(originalBlob), extension: 'jpg' };
         } catch (e) {
             console.error('Blob conversion failed, adding original image bytes', e);
-            return originalBlob;
+            return { blob: originalBlob, extension: getOriginalImageExtension(submission, originalBlob) };
         }
     }
 
@@ -424,7 +442,9 @@
     }
 
     async function handleZipDownload(scope: 'all' | 'folder') {
+        if (isProcessing) return;
         isDownloadZipModalOpen = false;
+        startProcessing('กำลังแพคไฟล์ ZIP กรุณารอสักครู่...');
         showToast('กำลังจัดเตรียมไฟล์ ZIP', 'เริ่มการโหลดรูปภาพทั้งหมดเป็น JPEG กลายทาง...', 'success');
 
         try {
@@ -455,16 +475,25 @@
                 return;
             }
 
+            let addedFiles = 0;
             for (const sub of targetSubmissions) {
-                const zipPath = `${sub.collection_name}/${sub.group_name}/${sub.name}.jpg`;
                 try {
-                    const jpegBlob = await getZipImageBlob(sub.img_data);
-                    zip.file(zipPath, jpegBlob);
+                    processingText = `กำลังแพคไฟล์ ${addedFiles + 1}/${targetSubmissions.length}: ${sub.name}`;
+                    const image = await getZipImageBlob(sub);
+                    const zipPath = `${sub.collection_name}/${sub.group_name}/${sub.name}.${image.extension}`;
+                    zip.file(zipPath, image.blob);
+                    addedFiles++;
                 } catch (e) {
                     console.error('Image download failed for', sub.name, e);
                 }
             }
 
+            if (addedFiles === 0) {
+                showToast('ดาวน์โหลด ZIP ล้มเหลว', 'ไม่สามารถโหลดรูปภาพสำหรับแพค ZIP ได้', 'error');
+                return;
+            }
+
+            processingText = 'กำลังสร้างไฟล์ ZIP...';
             const content = await zip.generateAsync({ type: 'blob' });
             const zipName = `temp-export-${zipNamePrefix}-${Date.now()}.zip`;
             const link = document.createElement('a');
@@ -478,15 +507,19 @@
         } catch (err) {
             console.error(err);
             showToast('เกิดข้อผิดพลาด', 'ไม่สามารถสีกอัด ZIP ได้', 'error');
+        } finally {
+            stopProcessing();
         }
     }
 
     async function downloadFolderZipDirect(colName: string, event: Event) {
         event.stopPropagation();
+        if (isProcessing) return;
         if (colName === 'deleted-drive') {
             showToast('ไม่สามารถดาวน์โหลดได้', 'Deleted drive ถูกข้ามจากการดาวน์โหลด ZIP', 'error');
             return;
         }
+        startProcessing(`กำลังแพคไฟล์ ZIP สำหรับ /${colName}...`);
         showToast('ดาวน์โหลดด่วน', `กำลังจัดเตรียมไฟล์โฟลเดอร์ /${colName} เป็น JPEG...`, 'success');
         try {
             const JSZip = (await import('jszip')).default;
@@ -496,15 +529,23 @@
                 showToast('ว่างเปล่า', `ไม่มีรูปภาพในโฟลเดอร์ /${colName}`, 'error');
                 return;
             }
+            let addedFiles = 0;
             for (const sub of targetSubmissions) {
-                const zipPath = `${sub.collection_name}/${sub.group_name}/${sub.name}.jpg`;
                 try {
-                    const jpegBlob = await getZipImageBlob(sub.img_data);
-                    zip.file(zipPath, jpegBlob);
+                    processingText = `กำลังแพคไฟล์ ${addedFiles + 1}/${targetSubmissions.length}: ${sub.name}`;
+                    const image = await getZipImageBlob(sub);
+                    const zipPath = `${sub.collection_name}/${sub.group_name}/${sub.name}.${image.extension}`;
+                    zip.file(zipPath, image.blob);
+                    addedFiles++;
                 } catch (e) {
                     console.error('Image download failed for', sub.name, e);
                 }
             }
+            if (addedFiles === 0) {
+                showToast('ดาวน์โหลดล้มเหลว', 'ไม่สามารถโหลดรูปภาพสำหรับแพค ZIP ได้', 'error');
+                return;
+            }
+            processingText = 'กำลังสร้างไฟล์ ZIP...';
             const content = await zip.generateAsync({ type: 'blob' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(content);
@@ -515,6 +556,8 @@
             showToast('ดาวน์โหลดด่วนสำเร็จ', `โฟลเดอร์ /${colName} ถูกดาวน์โหลดเสร็จสิ้น`, 'success');
         } catch (e) {
             showToast('ดาวน์โหลดล้มเหลว', 'เกิดข้อผิดพลาดในการโหลดไฟล์', 'error');
+        } finally {
+            stopProcessing();
         }
     }
 
