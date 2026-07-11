@@ -359,6 +359,8 @@
     }
 
     // ─── ZIP Download ──────────────────────────────────────────────────────────
+    const ZIP_DOWNLOAD_CONCURRENCY = 5;
+
     function getDownloadableImageUrl(submission: any) {
         const imageUrl = submission.img_data || submission.img_url || '';
         const params = new URLSearchParams();
@@ -441,6 +443,37 @@
         return submission.collection_id === 'deleted-drive' || submission.collection_name === 'deleted-drive';
     }
 
+    async function packZipSubmissions(zip: any, submissions: any[]) {
+        let nextIndex = 0;
+        let completedFiles = 0;
+        let addedFiles = 0;
+
+        async function worker() {
+            while (nextIndex < submissions.length) {
+                const sub = submissions[nextIndex++];
+                try {
+                    const image = await getZipImageBlob(sub);
+                    const zipPath = `${sub.collection_name}/${sub.group_name}/${sub.name}.${image.extension}`;
+                    zip.file(zipPath, image.blob);
+                    addedFiles++;
+                } catch (e) {
+                    console.error('Image download failed for', sub.name, e);
+                } finally {
+                    completedFiles++;
+                    progressPercent = Math.max(progressPercent, Math.round((completedFiles / submissions.length) * 90));
+                    processingText = `กำลังแพคไฟล์ ${completedFiles}/${submissions.length}`;
+                }
+            }
+        }
+
+        const workers = Array.from(
+            { length: Math.min(ZIP_DOWNLOAD_CONCURRENCY, submissions.length) },
+            () => worker()
+        );
+        await Promise.all(workers);
+        return addedFiles;
+    }
+
     async function handleZipDownload(scope: 'all' | 'folder') {
         if (isProcessing) return;
         isDownloadZipModalOpen = false;
@@ -475,18 +508,7 @@
                 return;
             }
 
-            let addedFiles = 0;
-            for (const sub of targetSubmissions) {
-                try {
-                    processingText = `กำลังแพคไฟล์ ${addedFiles + 1}/${targetSubmissions.length}: ${sub.name}`;
-                    const image = await getZipImageBlob(sub);
-                    const zipPath = `${sub.collection_name}/${sub.group_name}/${sub.name}.${image.extension}`;
-                    zip.file(zipPath, image.blob);
-                    addedFiles++;
-                } catch (e) {
-                    console.error('Image download failed for', sub.name, e);
-                }
-            }
+            const addedFiles = await packZipSubmissions(zip, targetSubmissions);
 
             if (addedFiles === 0) {
                 showToast('ดาวน์โหลด ZIP ล้มเหลว', 'ไม่สามารถโหลดรูปภาพสำหรับแพค ZIP ได้', 'error');
@@ -529,18 +551,7 @@
                 showToast('ว่างเปล่า', `ไม่มีรูปภาพในโฟลเดอร์ /${colName}`, 'error');
                 return;
             }
-            let addedFiles = 0;
-            for (const sub of targetSubmissions) {
-                try {
-                    processingText = `กำลังแพคไฟล์ ${addedFiles + 1}/${targetSubmissions.length}: ${sub.name}`;
-                    const image = await getZipImageBlob(sub);
-                    const zipPath = `${sub.collection_name}/${sub.group_name}/${sub.name}.${image.extension}`;
-                    zip.file(zipPath, image.blob);
-                    addedFiles++;
-                } catch (e) {
-                    console.error('Image download failed for', sub.name, e);
-                }
-            }
+            const addedFiles = await packZipSubmissions(zip, targetSubmissions);
             if (addedFiles === 0) {
                 showToast('ดาวน์โหลดล้มเหลว', 'ไม่สามารถโหลดรูปภาพสำหรับแพค ZIP ได้', 'error');
                 return;
