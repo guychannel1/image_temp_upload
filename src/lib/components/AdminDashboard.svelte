@@ -359,10 +359,24 @@
     }
 
     // ─── ZIP Download ──────────────────────────────────────────────────────────
-    async function convertToJpegBlob(base64Data: string): Promise<Blob> {
+    function getDownloadableImageUrl(imageUrl: string) {
+        if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+            return `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+        }
+        return imageUrl;
+    }
+
+    async function fetchImageBlob(imageUrl: string): Promise<Blob> {
+        const res = await fetch(getDownloadableImageUrl(imageUrl));
+        if (!res.ok) {
+            throw new Error(`Image fetch failed: ${res.status}`);
+        }
+        return res.blob();
+    }
+
+    async function convertToJpegBlob(imageSource: string): Promise<Blob> {
         return new Promise((resolve, reject) => {
             const img = new Image();
-            img.crossOrigin = 'anonymous';
             img.onload = () => {
                 const canvas = document.createElement('canvas');
                 canvas.width = img.naturalWidth || 600;
@@ -378,8 +392,35 @@
                 }, 'image/jpeg', 0.9);
             };
             img.onerror = () => reject(new Error('Image load failed'));
-            img.src = base64Data;
+            img.src = imageSource;
         });
+    }
+
+    async function convertBlobToJpegBlob(blob: Blob): Promise<Blob> {
+        const objectUrl = URL.createObjectURL(blob);
+        try {
+            return await convertToJpegBlob(objectUrl);
+        } finally {
+            URL.revokeObjectURL(objectUrl);
+        }
+    }
+
+    async function getZipImageBlob(imageUrl: string): Promise<Blob> {
+        if (imageUrl.startsWith('data:')) {
+            return convertToJpegBlob(imageUrl);
+        }
+
+        const originalBlob = await fetchImageBlob(imageUrl);
+        try {
+            return await convertBlobToJpegBlob(originalBlob);
+        } catch (e) {
+            console.error('Blob conversion failed, adding original image bytes', e);
+            return originalBlob;
+        }
+    }
+
+    function isDeletedDriveSubmission(submission: any) {
+        return submission.collection_id === 'deleted-drive' || submission.collection_name === 'deleted-drive';
     }
 
     async function handleZipDownload(scope: 'all' | 'folder') {
@@ -390,21 +431,21 @@
             const JSZip = (await import('jszip')).default;
             const zip = new JSZip();
 
-            let targetSubmissions = data.submissions;
+            let targetSubmissions = data.submissions.filter((s: any) => !isDeletedDriveSubmission(s));
             let zipNamePrefix = 'all';
 
             if (scope === 'folder') {
                 if (currentExplorerPath.length === 1) {
                     const colName = currentExplorerPath[0];
-                    targetSubmissions = data.submissions.filter((s: any) => s.collection_name === colName);
+                    targetSubmissions = data.submissions.filter((s: any) => s.collection_name === colName && !isDeletedDriveSubmission(s));
                     zipNamePrefix = `drive-${colName}`;
                 } else if (currentExplorerPath.length === 2) {
                     const colName = currentExplorerPath[0];
                     const groupName = currentExplorerPath[1];
-                    targetSubmissions = data.submissions.filter((s: any) => s.collection_name === colName && s.group_name === groupName);
+                    targetSubmissions = data.submissions.filter((s: any) => s.collection_name === colName && s.group_name === groupName && !isDeletedDriveSubmission(s));
                     zipNamePrefix = `drive-${colName}-${groupName}`;
                 } else if (selectedExplorerIds.size > 0) {
-                    targetSubmissions = data.submissions.filter((s: any) => selectedExplorerIds.has(s.id));
+                    targetSubmissions = data.submissions.filter((s: any) => selectedExplorerIds.has(s.id) && !isDeletedDriveSubmission(s));
                     zipNamePrefix = 'selected-files';
                 }
             }
@@ -417,13 +458,10 @@
             for (const sub of targetSubmissions) {
                 const zipPath = `${sub.collection_name}/${sub.group_name}/${sub.name}.jpg`;
                 try {
-                    const jpegBlob = await convertToJpegBlob(sub.img_data);
+                    const jpegBlob = await getZipImageBlob(sub.img_data);
                     zip.file(zipPath, jpegBlob);
                 } catch (e) {
-                    console.error('Canvas conversion failed for', sub.name, e);
-                    const res = await fetch(sub.img_data);
-                    const blob = await res.blob();
-                    zip.file(zipPath, blob);
+                    console.error('Image download failed for', sub.name, e);
                 }
             }
 
@@ -445,11 +483,15 @@
 
     async function downloadFolderZipDirect(colName: string, event: Event) {
         event.stopPropagation();
+        if (colName === 'deleted-drive') {
+            showToast('ไม่สามารถดาวน์โหลดได้', 'Deleted drive ถูกข้ามจากการดาวน์โหลด ZIP', 'error');
+            return;
+        }
         showToast('ดาวน์โหลดด่วน', `กำลังจัดเตรียมไฟล์โฟลเดอร์ /${colName} เป็น JPEG...`, 'success');
         try {
             const JSZip = (await import('jszip')).default;
             const zip = new JSZip();
-            const targetSubmissions = data.submissions.filter((s: any) => s.collection_name === colName);
+            const targetSubmissions = data.submissions.filter((s: any) => s.collection_name === colName && !isDeletedDriveSubmission(s));
             if (targetSubmissions.length === 0) {
                 showToast('ว่างเปล่า', `ไม่มีรูปภาพในโฟลเดอร์ /${colName}`, 'error');
                 return;
@@ -457,11 +499,10 @@
             for (const sub of targetSubmissions) {
                 const zipPath = `${sub.collection_name}/${sub.group_name}/${sub.name}.jpg`;
                 try {
-                    const jpegBlob = await convertToJpegBlob(sub.img_data);
+                    const jpegBlob = await getZipImageBlob(sub.img_data);
                     zip.file(zipPath, jpegBlob);
-                } catch {
-                    const res = await fetch(sub.img_data);
-                    zip.file(zipPath, await res.blob());
+                } catch (e) {
+                    console.error('Image download failed for', sub.name, e);
                 }
             }
             const content = await zip.generateAsync({ type: 'blob' });
