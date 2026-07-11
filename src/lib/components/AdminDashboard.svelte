@@ -137,6 +137,14 @@
         }, 3000);
     }
 
+    function formatBackupMessage(message: string) {
+        return message
+            .replace(/Cloudflare\s+R2/gi, 'ระบบสำรองข้อมูล')
+            .replace(/\bR2\b/g, 'ระบบสำรองข้อมูล')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
     function formatBytes(bytes: number, decimals = 2) {
         if (bytes === 0) return '0 Bytes';
         const k = 1024;
@@ -700,22 +708,24 @@
                 </button>
             {/if}
 
-             <!-- Backup to R2 -->
+             <!-- Backup -->
             {#if data.userRole === 'admin' || data.userRole === 'staff'}
                 <div class="flex items-center gap-2">
                     <form method="POST" action="?/backupToCloudflare" use:enhance={() => {
                         isBackingUp = true;
+                        startProcessing('กำลัง Backup ข้อมูล...');
                         return async ({ result, update }) => {
                             isBackingUp = false;
+                            stopProcessing();
                             if (result.type === 'success') {
-                                showToast('Backup สำเร็จ', (result.data as any)?.message ?? 'สำรองข้อมูล R2 เรียบร้อย', 'success');
+                                showToast('Backup สำเร็จ', formatBackupMessage((result.data as any)?.message ?? 'สำรองข้อมูลเรียบร้อย'), 'success');
                             } else if (result.type === 'failure') {
-                                showToast('Backup ล้มเหลว', (result.data as any)?.message ?? 'เกิดข้อผิดพลาด', 'error');
+                                showToast('Backup ล้มเหลว', formatBackupMessage((result.data as any)?.message ?? 'เกิดข้อผิดพลาด'), 'error');
                             }
                             await update();
                         };
                     }}>
-                        <button type="button" onclick={(e) => { const form = e.currentTarget.closest('form'); showConfirm('สำรองข้อมูล R2', 'คุณต้องการสำรองข้อมูลรูปภาพและชีตทังหมดขึ้น R2 ใช่หรือไม่?', () => form?.requestSubmit(), 'info'); }} disabled={isBackingUp} class="bg-zinc-900 border border-zinc-700 hover:border-amber-500 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center space-x-2 disabled:opacity-50">
+                        <button type="button" onclick={(e) => { const form = e.currentTarget.closest('form'); showConfirm('สำรองข้อมูล', 'คุณต้องการสำรองข้อมูลรูปภาพและชีตทังหมดใช่หรือไม่?', () => form?.requestSubmit(), 'info'); }} disabled={isBackingUp || isProcessing} class="bg-zinc-900 border border-zinc-700 hover:border-amber-500 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center space-x-2 disabled:opacity-50">
                             <CloudUpload class="w-4 h-4 text-amber-400 {isBackingUp ? 'animate-pulse' : ''}" />
                             <span>{isBackingUp ? 'กำลัง Backup...' : 'Backup'}</span>
                         </button>
