@@ -51,6 +51,7 @@ export const load: PageServerLoad = async ({ cookies }) => {
 
     let collectionsList: any[] = [];
     let submissionsList: any[] = [];
+    let collectionStats: Record<string, { count: number; totalFileSize: number }> = {};
     let usersList: any[] = [];
 
     if (loggedIn && userRole === 'admin') {
@@ -96,6 +97,17 @@ export const load: PageServerLoad = async ({ cookies }) => {
                 .order('created_at', { ascending: true });
 
             if (!subsErr && subs) {
+                collectionStats = subs.reduce((stats, s) => {
+                    if (!s.is_deleted && s.collection_id) {
+                        const current = stats[s.collection_id] ?? { count: 0, totalFileSize: 0 };
+                        stats[s.collection_id] = {
+                            count: current.count + 1,
+                            totalFileSize: current.totalFileSize + (s.file_size || 0)
+                        };
+                    }
+                    return stats;
+                }, {} as Record<string, { count: number; totalFileSize: number }>);
+
                 // Map and filter based on deletion status and user role
                 const allMapped = subs.map(s => ({
                     id: s.id,
@@ -113,14 +125,22 @@ export const load: PageServerLoad = async ({ cookies }) => {
 
                 if (userRole === 'admin') {
                     submissionsList = allMapped;
-                } else {
-                    submissionsList = allMapped.filter(s => !s.is_deleted);
                 }
             }
         } catch (err) {
             console.error('Supabase query failed, falling back to Mock DB:', err);
             collectionsList = mockDb.collections;
-            submissionsList = mockDb.submissions;
+            collectionStats = mockDb.submissions.reduce((stats, s) => {
+                if (!s.is_deleted && s.collection_id) {
+                    const current = stats[s.collection_id] ?? { count: 0, totalFileSize: 0 };
+                    stats[s.collection_id] = {
+                        count: current.count + 1,
+                        totalFileSize: current.totalFileSize + (s.file_size || 0)
+                    };
+                }
+                return stats;
+            }, {} as Record<string, { count: number; totalFileSize: number }>);
+            submissionsList = userRole === 'admin' ? mockDb.submissions : [];
         }
     } else {
         // Fallback to local mock db
@@ -132,11 +152,19 @@ export const load: PageServerLoad = async ({ cookies }) => {
             group_name: s.is_deleted ? '' : s.group_name,
             category: s.is_deleted ? 'deleted' : s.collection_name
         }));
+        collectionStats = mockDb.submissions.reduce((stats, s) => {
+            if (!s.is_deleted && s.collection_id) {
+                const current = stats[s.collection_id] ?? { count: 0, totalFileSize: 0 };
+                stats[s.collection_id] = {
+                    count: current.count + 1,
+                    totalFileSize: current.totalFileSize + (s.file_size || 0)
+                };
+            }
+            return stats;
+        }, {} as Record<string, { count: number; totalFileSize: number }>);
 
         if (userRole === 'admin') {
             submissionsList = allMapped;
-        } else {
-            submissionsList = allMapped.filter(s => !s.is_deleted);
         }
     }
 
@@ -154,6 +182,7 @@ export const load: PageServerLoad = async ({ cookies }) => {
         collections: collectionsList,
         activeCollections: collectionsList.filter(c => c.is_active && c.id !== 'deleted-drive'),
         submissions: submissionsList,
+        collectionStats,
         loggedIn,
         userRole,
         username,

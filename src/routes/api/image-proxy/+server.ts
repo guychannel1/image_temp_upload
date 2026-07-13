@@ -1,10 +1,30 @@
 import { error } from '@sveltejs/kit';
 import { supabase, isSupabaseConfigured } from '$lib/server/supabase';
+import * as mockDb from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
 const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
 
-export const GET: RequestHandler = async ({ url, fetch }) => {
+async function isAdminSession(username: string | undefined): Promise<boolean> {
+	if (!username) return false;
+
+	if (isSupabaseConfigured && supabase) {
+		const { data } = await supabase
+			.from('app_users')
+			.select('role')
+			.eq('username', username)
+			.maybeSingle();
+		return data?.role === 'admin';
+	}
+
+	return mockDb.appUsers.some((user) => user.username === username && user.role === 'admin');
+}
+
+export const GET: RequestHandler = async ({ url, fetch, cookies }) => {
+	if (!(await isAdminSession(cookies.get('admin_session')))) {
+		error(403, 'Admin access required');
+	}
+
 	const storagePath = url.searchParams.get('path');
 	const imageUrl = url.searchParams.get('url');
 

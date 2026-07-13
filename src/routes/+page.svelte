@@ -16,17 +16,22 @@
     const MAX_SUBMISSIONS_PER_COLLECTION = 500; // Hard limit of 500
     const WARN_SUBMISSIONS_PER_COLLECTION = 450; // 90% threshold
 
+    function getCollectionSubmissionCount(collectionId: string) {
+        return data.collectionStats?.[collectionId]?.count
+            ?? data.submissions.filter(s => s.collection_id === collectionId && !s.is_deleted).length;
+    }
+
     let overQuotaCollections = $derived(
         data.collections.filter(c => {
             const limit = c.submission_limit ?? 500;
-            return data.submissions.filter(s => s.collection_id === c.id).length >= limit;
+            return getCollectionSubmissionCount(c.id) >= limit;
         })
     );
 
     let nearQuotaCollections = $derived(
         data.collections.filter(c => {
             const limit = c.submission_limit ?? 500;
-            const count = data.submissions.filter(s => s.collection_id === c.id).length;
+            const count = getCollectionSubmissionCount(c.id);
             return count >= Math.floor(limit * 0.9) && count < limit;
         })
     );
