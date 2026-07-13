@@ -26,11 +26,19 @@ export interface AppUser {
     password_hash: string;
 }
 
+export interface AppSession {
+    token_hash: string;
+    username: string;
+    expires_at: string;
+}
+
 // In-memory mock database users
 export let appUsers: AppUser[] = [
     { id: "usr-1", username: "guyssar", role: "admin", password_hash: "d2175b1572d0be3ee4e5e04cf339b6f9946c47d6e4b7615d5bf70618d6cace61" }, // password 'guychannel1' hash
     { id: "usr-2", username: "admin", role: "staff", password_hash: "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4" }    // password '1234' hash
 ];
+
+export let appSessions: AppSession[] = [];
 
 export let collections: Collection[] = [
     { id: "col-1", name: "ewe", is_active: true, submission_limit: 500 },
@@ -202,4 +210,3 @@ export function importBackupData(newCols: any[], newSubs: any[]) {
         is_deleted: s.is_deleted ?? false
     })));
 }
-

@@ -420,6 +420,24 @@
         }
     }
 
+    function isHeicImage(submission: any, blob?: Blob) {
+        const contentType = blob?.type?.toLowerCase() || '';
+        if (contentType.includes('heic') || contentType.includes('heif')) return true;
+
+        const source = submission.file_path || submission.img_data || submission.img_url || '';
+        return /\.(heic|heif)(\?|$)/i.test(source);
+    }
+
+    async function convertHeicBlobToJpegBlob(blob: Blob): Promise<Blob> {
+        const heic2any = (await import('heic2any')).default;
+        const converted = await heic2any({
+            blob,
+            toType: 'image/jpeg',
+            quality: 0.9
+        });
+        return Array.isArray(converted) ? converted[0] : converted;
+    }
+
     function getOriginalImageExtension(submission: any, blob: Blob) {
         const contentType = blob.type.toLowerCase();
         if (contentType.includes('png')) return 'png';
@@ -439,6 +457,10 @@
         }
 
         const originalBlob = await fetchImageBlob(submission);
+        if (isHeicImage(submission, originalBlob)) {
+            return { blob: await convertHeicBlobToJpegBlob(originalBlob), extension: 'jpg' };
+        }
+
         try {
             return { blob: await convertBlobToJpegBlob(originalBlob), extension: 'jpg' };
         } catch (e) {

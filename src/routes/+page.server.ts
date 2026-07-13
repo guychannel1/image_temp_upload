@@ -1,6 +1,7 @@
 import { supabase, isSupabaseConfigured } from '$lib/server/supabase';
 import * as mockDb from '$lib/server/db';
 import { uploadToR2, deleteFromR2, deleteObjectsFromR2 } from '$lib/server/r2';
+import { createSession, destroySession, getCurrentUser } from '$lib/server/auth';
 import { fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 import { createHash } from 'crypto';
@@ -21,33 +22,10 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 }
 
 export const load: PageServerLoad = async ({ cookies }) => {
-    const session = cookies.get('admin_session');
-    const loggedIn = !!session;
-    const username = session || '';
-    
-    let userRole = '';
-    if (loggedIn) {
-        if (isSupabaseConfigured && supabase) {
-            try {
-                const { data: user } = await supabase
-                    .from('app_users')
-                    .select('role')
-                    .eq('username', username)
-                    .maybeSingle();
-                if (user) {
-                    userRole = user.role;
-                }
-            } catch (err) {
-                console.error('Failed to query user role from Supabase:', err);
-            }
-        }
-        if (!userRole) {
-            const user = mockDb.appUsers.find(u => u.username === username);
-            if (user) {
-                userRole = user.role;
-            }
-        }
-    }
+    const currentUser = await getCurrentUser(cookies);
+    const loggedIn = !!currentUser;
+    const username = currentUser?.username || '';
+    const userRole = currentUser?.role || '';
 
     let collectionsList: any[] = [];
     let submissionsList: any[] = [];
@@ -210,12 +188,7 @@ export const actions: Actions = {
                     .maybeSingle();
 
                 if (user && user.password_hash === passwordHash) {
-                    cookies.set('admin_session', username, {
-                        path: '/',
-                        httpOnly: true,
-                        sameSite: 'strict',
-                        maxAge: 60 * 60 * 24 // 1 day
-                    });
+                    await createSession(user.username, cookies);
                     return { success: true, loggedIn: true, role: user.role, username };
                 }
             } catch (err) {
@@ -226,12 +199,7 @@ export const actions: Actions = {
         // Fallback to local memory mock db
         const user = mockDb.appUsers.find(u => u.username === username);
         if (user && user.password_hash === passwordHash) {
-            cookies.set('admin_session', username, {
-                path: '/',
-                httpOnly: true,
-                sameSite: 'strict',
-                maxAge: 60 * 60 * 24 // 1 day
-            });
+            await createSession(user.username, cookies);
             return { success: true, loggedIn: true, role: user.role, username };
         }
 
@@ -239,7 +207,7 @@ export const actions: Actions = {
     },
 
     logout: async ({ cookies }) => {
-        cookies.delete('admin_session', { path: '/' });
+        await destroySession(cookies);
         return { success: true, loggedIn: false };
     },
 
@@ -471,8 +439,8 @@ export const actions: Actions = {
 
     // Permanent Delete Submissions (only allowed for guyssar)
     deleteSubmissionsPermanently: async ({ request, cookies }) => {
-        const session = cookies.get('admin_session');
-        if (session?.toLowerCase() !== 'guyssar') {
+        const currentUser = await getCurrentUser(cookies);
+        if (currentUser?.username?.toLowerCase() !== 'guyssar') {
             return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการลบรูปภาพถาวร' });
         }
 
@@ -785,8 +753,8 @@ export const actions: Actions = {
     },
 
     backupToCloudflare: async ({ cookies, platform }) => {
-        const session = cookies.get('admin_session');
-        if (!session) {
+        const currentUser = await getCurrentUser(cookies);
+        if (!currentUser) {
             return fail(401, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
         }
 
@@ -805,8 +773,8 @@ export const actions: Actions = {
     },
 
     importBackupJson: async ({ request, cookies }) => {
-        const session = cookies.get('admin_session');
-        if (!session) {
+        const currentUser = await getCurrentUser(cookies);
+        if (!currentUser) {
             return fail(401, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
         }
 
@@ -893,8 +861,8 @@ export const actions: Actions = {
     },
 
     createUser: async ({ request, cookies }) => {
-        const session = cookies.get('admin_session');
-        if (session?.toLowerCase() !== 'guyssar') {
+        const currentUser = await getCurrentUser(cookies);
+        if (currentUser?.username?.toLowerCase() !== 'guyssar') {
             return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการสร้างผู้ใช้ (เฉพาะ guyssar เท่านั้น)' });
         }
 
@@ -949,8 +917,8 @@ export const actions: Actions = {
     },
 
     changeUserPassword: async ({ request, cookies }) => {
-        const session = cookies.get('admin_session');
-        if (!session) {
+        const currentUser = await getCurrentUser(cookies);
+        if (!currentUser) {
             return fail(401, { success: false, message: 'กรุณาเข้าสู่ระบบ' });
         }
 
@@ -963,7 +931,7 @@ export const actions: Actions = {
         }
 
         // Only guyssar can change anyone's password, other users can only change their own password
-        if (session?.toLowerCase() !== 'guyssar' && session?.toLowerCase() !== targetUsername?.toLowerCase()) {
+        if (currentUser.username?.toLowerCase() !== 'guyssar' && currentUser.username?.toLowerCase() !== targetUsername?.toLowerCase()) {
             return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการเปลี่ยนรหัสผ่านของผู้อื่น' });
         }
 
@@ -995,8 +963,8 @@ export const actions: Actions = {
     },
 
     deleteUser: async ({ request, cookies }) => {
-        const session = cookies.get('admin_session');
-        if (session?.toLowerCase() !== 'guyssar') {
+        const currentUser = await getCurrentUser(cookies);
+        if (currentUser?.username?.toLowerCase() !== 'guyssar') {
             return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการลบผู้ใช้ (เฉพาะ guyssar เท่านั้น)' });
         }
 

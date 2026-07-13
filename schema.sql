@@ -40,6 +40,17 @@ CREATE TABLE IF NOT EXISTS app_users (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Store hashed login session tokens. Raw tokens only live in httpOnly cookies.
+CREATE TABLE IF NOT EXISTS app_sessions (
+    token_hash TEXT PRIMARY KEY,
+    username TEXT NOT NULL REFERENCES app_users(username) ON DELETE CASCADE,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS app_sessions_username_idx ON app_sessions(username);
+CREATE INDEX IF NOT EXISTS app_sessions_expires_at_idx ON app_sessions(expires_at);
+
 -- Seed app_users with users (guyssar: guychannel1 -> admin, admin: 1234 -> staff)
 -- Password 'guychannel1' hash: d2175b1572d0be3ee4e5e04cf339b6f9946c47d6e4b7615d5bf70618d6cace61
 -- Password '1234' hash: 03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4
