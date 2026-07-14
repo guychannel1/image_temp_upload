@@ -458,9 +458,14 @@
         return value.trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ');
     }
 
-    function formatEvidenceZipName(folder: string, order: number | string, fullName: string) {
+    function numberedNameSuffix(value: string | null | undefined) {
+        const match = (value ?? '').trim().match(/\((\d+)\)\s*$/);
+        return match ? `_${match[1]}` : '';
+    }
+
+    function formatEvidenceZipName(folder: string, order: number | string, fullName: string, duplicateSuffix = '') {
         const orderText = typeof order === 'number' ? String(order).padStart(3, '0') : safeFileName(order).replace(/[^a-z0-9ก-๙_-]+/gi, '');
-        return `${safeFileName(folder)}_${orderText}_${safeFileName(fullName)}.jpg`;
+        return `${safeFileName(folder)}_${orderText}_${safeFileName(fullName)}${duplicateSuffix}.jpg`;
     }
 
     async function packZipSubmissions(zip: any, submissions: any[]) {
@@ -475,7 +480,7 @@
                 try {
                     const image = await getZipImageBlob(sub);
                     const folder = sub.collection_name || 'folder';
-                    const zipPath = `${safeFileName(folder)}/${formatEvidenceZipName(folder, order, cleanPersonName(sub.name))}`;
+                    const zipPath = `${safeFileName(folder)}/${formatEvidenceZipName(folder, order, cleanPersonName(sub.name), numberedNameSuffix(sub.name))}`;
                     zip.file(zipPath, image.blob, { compression: 'STORE' });
                     addedFiles++;
                 } catch (e) {
@@ -1089,7 +1094,7 @@
                     try {
                         const image = await getZipImageBlob(entry.file);
                         zip.file(
-                            `${entry.type}/${formatEvidenceZipName(entry.type, entry.row.order, entry.row.fullName)}`,
+                            `${entry.type}/${formatEvidenceZipName(entry.type, entry.row.order, entry.row.fullName, numberedNameSuffix(entry.file?.name))}`,
                             image.blob,
                             { compression: 'STORE' }
                         );
