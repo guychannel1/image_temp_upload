@@ -649,3 +649,38 @@ html[data-mounted] .theme-pill__thumb {
         -webkit-backdrop-filter: none !important;
     }
 }
+
+@media print {
+    body {
+        background: #ffffff !important;
+        color: #111827 !important;
+    }
+
+    header,
+    .site-header,
+    .evidence-report-section textarea,
+    .evidence-report-section button,
+    .evidence-report-section select,
+    .evidence-report-section input,
+    .evidence-report-section > div:first-child,
+    .evidence-report-section > div > div:first-child {
+        display: none !important;
+    }
+
+    .evidence-report-section,
+    .evidence-report-section * {
+        background: #ffffff !important;
+        color: #111827 !important;
+        border-color: #d1d5db !important;
+        box-shadow: none !important;
+    }
+
+    .evidence-report-section {
+        display: block !important;
+        border: 0 !important;
+    }
+
+    .evidence-report-section table {
+        border-collapse: collapse !important;
+    }
+}

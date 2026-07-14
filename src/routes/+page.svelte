@@ -17,7 +17,8 @@
     const WARN_SUBMISSIONS_PER_COLLECTION = 450; // 90% threshold
 
     function getCollectionSubmissionCount(collectionId: string) {
-        return data.collectionStats?.[collectionId]?.count
+        const collectionStats = data.collectionStats as Record<string, { count: number; totalFileSize: number }>;
+        return collectionStats?.[collectionId]?.count
             ?? data.submissions.filter(s => s.collection_id === collectionId && !s.is_deleted).length;
     }
 

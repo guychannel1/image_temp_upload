@@ -32,6 +32,13 @@ export interface AppSession {
     expires_at: string;
 }
 
+export interface ParticipantRecord {
+    id: string;
+    order: number;
+    full_name: string;
+    created_at: string;
+}
+
 // In-memory mock database users
 export let appUsers: AppUser[] = [
     { id: "usr-1", username: "guyssar", role: "admin", password_hash: "d2175b1572d0be3ee4e5e04cf339b6f9946c47d6e4b7615d5bf70618d6cace61" }, // password 'guychannel1' hash
@@ -39,6 +46,8 @@ export let appUsers: AppUser[] = [
 ];
 
 export let appSessions: AppSession[] = [];
+
+export let participants: ParticipantRecord[] = [];
 
 export let collections: Collection[] = [
     { id: "col-1", name: "ewe", is_active: true, submission_limit: 500 },
@@ -186,7 +195,39 @@ export function restoreSubmissions(ids: string[]) {
     });
 }
 
-export function importBackupData(newCols: any[], newSubs: any[]) {
+export function replaceParticipants(rows: Array<{ order: number; fullName: string }>) {
+    const now = new Date().toISOString();
+    participants.length = 0;
+    participants.push(...rows.map((row) => ({
+        id: 'participant-' + row.order,
+        order: row.order,
+        full_name: row.fullName,
+        created_at: now
+    })));
+}
+
+export function addParticipant(fullName: string, order?: number) {
+    const cleanName = fullName.trim().replace(/\s+/g, ' ');
+    if (!cleanName) {
+        throw new Error('กรุณากรอกชื่อ-สกุล');
+    }
+    const sorted = [...participants].sort((a, b) => a.order - b.order);
+    const insertIndex = order && order > 0
+        ? Math.min(Math.max(order - 1, 0), sorted.length)
+        : sorted.length;
+    const record = {
+        id: 'participant-' + Date.now(),
+        order: insertIndex + 1,
+        full_name: cleanName,
+        created_at: new Date().toISOString()
+    };
+    sorted.splice(insertIndex, 0, record);
+    participants.length = 0;
+    participants.push(...sorted.map((row, index) => ({ ...row, order: index + 1 })));
+    return record;
+}
+
+export function importBackupData(newCols: any[], newSubs: any[], newParticipants: any[] = []) {
     collections.length = 0;
     collections.push(...newCols.map(c => ({
         id: c.id || ('col-' + Math.random().toString(36).substring(2, 9)),
@@ -209,4 +250,13 @@ export function importBackupData(newCols: any[], newSubs: any[]) {
         img_data: s.img_url || s.img_data || '',
         is_deleted: s.is_deleted ?? false
     })));
+
+    participants.length = 0;
+    participants.push(...newParticipants.map((p, index) => ({
+        id: p.id || ('participant-' + Math.random().toString(36).substring(2, 9)),
+        order: p.list_order ?? p.order ?? index + 1,
+        full_name: p.full_name ?? p.fullName ?? p.name,
+        created_at: p.created_at || new Date().toISOString()
+    })).filter(p => p.full_name));
+    participants.sort((a, b) => a.order - b.order);
 }

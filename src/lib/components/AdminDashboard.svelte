@@ -2,10 +2,17 @@
     import { enhance } from '$app/forms';
     import { 
         Folder, ArrowUp, Home, Search, Trash2, FolderPlus, Download, 
-        Power, ChevronLeft, ChevronRight, ChevronDown, HardDrive, FolderGit2,
-        RefreshCw, Sidebar, RotateCcw, CloudUpload, User, Lock, CheckSquare, Loader2
+        Power, ChevronLeft, ChevronRight, HardDrive, FolderGit2,
+        RefreshCw, Sidebar, RotateCcw, CloudUpload, User, Lock, CheckSquare, Loader2, MoreVertical
     } from '@lucide/svelte';
     import { gsap } from 'gsap';
+    import {
+        buildEvidenceReport,
+        cleanPersonName,
+        inferEvidenceType,
+        normalizePersonName,
+        parseParticipantList
+    } from '$lib/evidence';
 
     let {
         data = $bindable(),
@@ -57,17 +64,6 @@
     let isLoggingIn = $state(false);
     let loginError = $state('');
 
-    let expandedCollections = $state<Record<string, boolean>>({});
-    function toggleCollectionExpand(colId: string) {
-        if (expandedCollections[colId] === undefined) {
-            const col = data.collections.find((c: any) => c.id === colId);
-            const isCurrentlyActive = col ? currentExplorerPath[0] === col.name : false;
-            expandedCollections[colId] = !isCurrentlyActive;
-        } else {
-            expandedCollections[colId] = !expandedCollections[colId];
-        }
-    }
-
     let editingLimitId = $state<string | null>(null);
     let editingLimitValue = $state(500);
 
@@ -89,6 +85,31 @@
     let createRole = $state<'admin' | 'staff'>('staff');
     let changePasswordUsername = $state('');
     let changePasswordNewPassword = $state('');
+    let adminWorkspaceTab = $state<'overview' | 'participants' | 'mapping' | 'files'>('overview');
+    const initialParticipantText = (data.participants ?? []).map((p: any) => `${p.order}\t${p.fullName}`).join('\n');
+    let participantSourceText = $state(initialParticipantText);
+    let participantListText = $state(initialParticipantText);
+    let participantAddOrder = $state('');
+    let participantAddName = $state('');
+    let evidenceSearch = $state('');
+    let evidenceFilter = $state<'all' | 'missing' | 'missing-eve' | 'missing-cer' | 'complete'>('all');
+    let isEvidencePanelOpen = $state(true);
+    let mappingDrafts = $state<Record<string, { name: string; evidence_type: 'eve' | 'cer' }>>({});
+    let editingSubmission = $state<any | null>(null);
+    let editingSubmissionName = $state('');
+    let editingSubmissionType = $state<'eve' | 'cer'>('eve');
+
+    const workspaceTabs = [
+        { id: 'overview', label: 'ภาพรวม', count: 0 },
+        { id: 'participants', label: 'รายชื่อ', count: 0 },
+        { id: 'mapping', label: 'ตรวจ mapping', count: 0 },
+        { id: 'files', label: 'ไฟล์', count: 0 }
+    ] as const;
+
+    function switchWorkspaceTab(tab: typeof adminWorkspaceTab) {
+        adminWorkspaceTab = tab;
+        if (tab !== 'files') isEvidencePanelOpen = true;
+    }
 
     function showConfirm(title: string, message: string, action: () => void, theme: 'danger' | 'success' | 'info' = 'danger') {
         confirmTitle = title;
@@ -206,26 +227,8 @@
                             img_data: sub.img_data
                         }));
                 }
-                const colSubmissions = data.submissions.filter((s: any) => s.collection_id === colObj.id);
-                const groups = [...new Set<string>(colSubmissions.map((s: any) => s.group_name))];
-                return groups.map(group => {
-                    const imgCount = colSubmissions.filter((s: any) => s.group_name === group).length;
-                    return {
-                        type: 'folder',
-                        id: `group-${group}`,
-                        name: group,
-                        subText: `${imgCount} รูปภาพ`,
-                        colorClass: 'text-brand-500',
-                        onClick: () => navigateToPath([colName, group])
-                    };
-                });
-            } else {
-                const colName = currentExplorerPath[0];
-                const groupName = currentExplorerPath[1];
-                const colObj = data.collections.find((c: any) => c.name === colName);
-                if (!colObj) return [];
                 return data.submissions
-                    .filter((s: any) => s.collection_id === colObj.id && s.group_name === groupName)
+                    .filter((s: any) => s.collection_id === colObj.id)
                     .map((sub: any) => ({
                         type: 'file',
                         id: sub.id,
@@ -259,37 +262,15 @@
                 }
             }
         }
-        if (currentExplorerPath.length <= 1) {
-            for (const col of targetCols) {
-                const colSubmissions = data.submissions.filter((s: any) => s.collection_id === col.id);
-                const groups = [...new Set<string>(colSubmissions.map((s: any) => s.group_name))];
-                for (const gp of groups) {
-                    if (gp.toLowerCase().includes(searchLower)) {
-                        const imgCount = colSubmissions.filter((s: any) => s.group_name === gp).length;
-                        items.push({
-                            type: 'folder',
-                            id: `group-${col.name}-${gp}`,
-                            name: currentExplorerPath.length === 0 ? `/${col.name}/${gp}` : gp,
-                            subText: `โฟลเดอร์ย่อย | ${imgCount} รูป`,
-                            colorClass: 'text-brand-500',
-                            onClick: () => { searchExplorerQuery = ''; navigateToPath([col.name, gp]); }
-                        });
-                    }
-                }
-            }
-        }
         for (const col of targetCols) {
             let colSubmissions = data.submissions.filter((s: any) => s.collection_id === col.id);
-            if (currentExplorerPath.length === 2) {
-                colSubmissions = colSubmissions.filter((s: any) => s.group_name === currentExplorerPath[1]);
-            }
             for (const sub of colSubmissions) {
                 if (sub.name.toLowerCase().includes(searchLower)) {
                     items.push({
                         type: 'file',
                         id: sub.id,
                         name: sub.name,
-                        subText: `${sub.collection_name}/${sub.group_name} | ${formatBytes(sub.file_size)}`,
+                        subText: `${sub.collection_name} | ${formatBytes(sub.file_size)}`,
                         original_size: sub.original_size,
                         file_path: sub.file_path,
                         img_data: sub.img_data
@@ -473,18 +454,29 @@
         return submission.collection_id === 'deleted-drive' || submission.collection_name === 'deleted-drive';
     }
 
+    function safeFileName(value: string) {
+        return value.trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ');
+    }
+
+    function formatEvidenceZipName(folder: string, order: number | string, fullName: string) {
+        const orderText = typeof order === 'number' ? String(order).padStart(3, '0') : safeFileName(order).replace(/[^a-z0-9ก-๙_-]+/gi, '');
+        return `${safeFileName(folder)}_${orderText}_${safeFileName(fullName)}.jpg`;
+    }
+
     async function packZipSubmissions(zip: any, submissions: any[]) {
         let nextIndex = 0;
         let completedFiles = 0;
         let addedFiles = 0;
+        const orderedSubmissions = submissions.map((sub, index) => ({ sub, order: index + 1 }));
 
         async function worker() {
-            while (nextIndex < submissions.length) {
-                const sub = submissions[nextIndex++];
+            while (nextIndex < orderedSubmissions.length) {
+                const { sub, order } = orderedSubmissions[nextIndex++];
                 try {
                     const image = await getZipImageBlob(sub);
-                    const zipPath = `${sub.collection_name}/${sub.group_name}/${sub.name}.${image.extension}`;
-                    zip.file(zipPath, image.blob);
+                    const folder = sub.collection_name || 'folder';
+                    const zipPath = `${safeFileName(folder)}/${formatEvidenceZipName(folder, order, cleanPersonName(sub.name))}`;
+                    zip.file(zipPath, image.blob, { compression: 'STORE' });
                     addedFiles++;
                 } catch (e) {
                     console.error('Image download failed for', sub.name, e);
@@ -522,11 +514,6 @@
                     const colName = currentExplorerPath[0];
                     targetSubmissions = data.submissions.filter((s: any) => s.collection_name === colName && !isDeletedDriveSubmission(s));
                     zipNamePrefix = `drive-${colName}`;
-                } else if (currentExplorerPath.length === 2) {
-                    const colName = currentExplorerPath[0];
-                    const groupName = currentExplorerPath[1];
-                    targetSubmissions = data.submissions.filter((s: any) => s.collection_name === colName && s.group_name === groupName && !isDeletedDriveSubmission(s));
-                    zipNamePrefix = `drive-${colName}-${groupName}`;
                 } else if (selectedExplorerIds.size > 0) {
                     targetSubmissions = data.submissions.filter((s: any) => selectedExplorerIds.has(s.id) && !isDeletedDriveSubmission(s));
                     zipNamePrefix = 'selected-files';
@@ -546,7 +533,7 @@
             }
 
             processingText = 'กำลังสร้างไฟล์ ZIP...';
-            const content = await zip.generateAsync({ type: 'blob' });
+            const content = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
             const zipName = `temp-export-${zipNamePrefix}-${Date.now()}.zip`;
             const link = document.createElement('a');
             link.href = URL.createObjectURL(content);
@@ -587,7 +574,7 @@
                 return;
             }
             processingText = 'กำลังสร้างไฟล์ ZIP...';
-            const content = await zip.generateAsync({ type: 'blob' });
+            const content = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(content);
             link.download = `temp-export-drive-${colName}-${Date.now()}.zip`;
@@ -616,6 +603,532 @@
     }
 
     // ─── Derived ───────────────────────────────────────────────────────────────
+    function fallbackParticipantsFromSubmissions() {
+        const names = new Map<string, string>();
+        for (const submission of data.submissions.filter((s: any) => !isDeletedDriveSubmission(s) && !s.is_deleted)) {
+            const cleanName = cleanPersonName(submission.name);
+            const key = normalizePersonName(cleanName);
+            if (key && !names.has(key)) names.set(key, cleanName);
+        }
+        return [...names.values()].sort((a, b) => a.localeCompare(b, 'th')).map((fullName, index) => ({
+            order: index + 1,
+            fullName
+        }));
+    }
+
+    const participantRows = $derived.by(() => {
+        const databaseRows = (data.participants ?? [])
+            .map((p: any, index: number) => ({
+                order: Number(p.order ?? index + 1),
+                fullName: cleanPersonName(p.fullName ?? p.full_name ?? p.name)
+            }))
+            .filter((p: any) => p.fullName.length > 0);
+        if (databaseRows.length > 0) return databaseRows;
+
+        const parsed = parseParticipantList(participantListText);
+        return parsed.length > 0 ? parsed : fallbackParticipantsFromSubmissions();
+    });
+
+    function buildFullEvidenceReportRows(): any[] {
+        const rows: any[] = buildEvidenceReport(participantRows, data.submissions);
+        const participantKeys = new Set(rows.map((row: any) => row.key));
+        const unlistedRows = new Map<string, any>();
+
+        for (const submission of data.submissions) {
+            if (isDeletedDriveSubmission(submission) || submission.is_deleted) continue;
+            const type = inferEvidenceType(submission);
+            if (!type) continue;
+
+            const fullName = cleanPersonName(submission.participant_name || submission.name);
+            const key = normalizePersonName(fullName);
+            if (!key || participantKeys.has(key)) continue;
+
+            if (!unlistedRows.has(key)) {
+                unlistedRows.set(key, {
+                    order: 'N/A',
+                    fullName,
+                    key: `unlisted-${key}`,
+                    eve: false,
+                    cer: false,
+                    eveCount: 0,
+                    cerCount: 0,
+                    eveFiles: [],
+                    cerFiles: [],
+                    isUnlisted: true
+                });
+            }
+
+            const row = unlistedRows.get(key);
+            if (type === 'eve') {
+                row.eve = true;
+                row.eveCount++;
+                row.eveFiles.push(submission);
+            } else {
+                row.cer = true;
+                row.cerCount++;
+                row.cerFiles.push(submission);
+            }
+        }
+
+        return [...rows, ...unlistedRows.values()].map((row: any, index: number) => ({
+            ...row,
+            sortIndex: typeof row.order === 'number' ? row.order : participantRows.length + index + 1
+        }));
+    }
+
+    const allEvidenceReportRows = $derived.by((): any[] => buildFullEvidenceReportRows());
+
+    const evidenceReportRows = $derived.by(() => {
+        const rows = allEvidenceReportRows;
+        const query = evidenceSearch.trim().toLowerCase();
+        return rows.filter((row: any) => {
+            if (query && !row.fullName.toLowerCase().includes(query) && !String(row.order).includes(query)) return false;
+            if (evidenceFilter === 'missing') return !row.eve || !row.cer;
+            if (evidenceFilter === 'missing-eve') return !row.eve;
+            if (evidenceFilter === 'missing-cer') return !row.cer;
+            if (evidenceFilter === 'complete') return row.eve && row.cer;
+            return true;
+        });
+    });
+
+    const evidenceStats = $derived.by(() => {
+        const rows = allEvidenceReportRows;
+        return {
+            total: rows.length,
+            complete: rows.filter((row: any) => row.eve && row.cer).length,
+            submittedEve: rows.filter((row: any) => row.eve).length,
+            submittedCer: rows.filter((row: any) => row.cer).length,
+            missingEve: rows.filter((row: any) => !row.eve).length,
+            missingCer: rows.filter((row: any) => !row.cer).length
+        };
+    });
+
+    const unmatchedEvidenceFiles = $derived.by(() => {
+        const participantKeys = new Set(participantRows.map((p: any) => normalizePersonName(p.fullName)));
+        return data.submissions
+            .filter((submission: any) => !isDeletedDriveSubmission(submission) && !submission.is_deleted)
+            .filter((submission: any) => {
+                const hasType = !!inferEvidenceType(submission);
+                const hasParticipant = participantKeys.has(normalizePersonName(submission.name));
+                return !hasType || !hasParticipant;
+            });
+    });
+
+    function getMappingDraft(file: any) {
+        return mappingDrafts[file.id] ?? {
+            name: cleanPersonName(file.name),
+            evidence_type: (inferEvidenceType(file) ?? 'eve') as 'eve' | 'cer'
+        };
+    }
+
+    function updateMappingDraft(file: any, patch: Partial<{ name: string; evidence_type: 'eve' | 'cer' }>) {
+        mappingDrafts = {
+            ...mappingDrafts,
+            [file.id]: {
+                ...getMappingDraft(file),
+                ...patch
+            }
+        };
+    }
+
+    function openSubmissionMappingEditor(file: any, event?: Event) {
+        event?.stopPropagation();
+        editingSubmission = file;
+        editingSubmissionName = cleanPersonName(file.name);
+        editingSubmissionType = (inferEvidenceType(file) ?? 'eve') as 'eve' | 'cer';
+    }
+
+    function printUnmatchedEvidenceFiles() {
+        const rows = unmatchedEvidenceFiles.map((file: any, index: number) => ({
+            index: index + 1,
+            name: cleanPersonName(file.name),
+            folder: inferEvidenceType(file) ?? file.collection_name ?? '-',
+            path: file.file_path ?? ''
+        }));
+        const html = `
+            <html>
+                <head>
+                    <title>unmatched-evidence-files</title>
+                    <style>
+                        body { font-family: sans-serif; padding: 24px; color: #111827; }
+                        h1 { font-size: 18px; margin: 0 0 12px; }
+                        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+                        th, td { border: 1px solid #d1d5db; padding: 6px 8px; text-align: left; }
+                        th { background: #f3f4f6; }
+                    </style>
+                </head>
+                <body>
+                    <h1>รายชื่อ/ไฟล์ที่หา mapping ไม่เจอ (${rows.length})</h1>
+                    <table>
+                        <thead><tr><th>#</th><th>ชื่อ</th><th>folder</th><th>path</th></tr></thead>
+                        <tbody>
+                            ${rows.map((row: { index: number; name: string; folder: string; path: string }) => `<tr><td>${row.index}</td><td>${row.name}</td><td>${row.folder}</td><td>${row.path}</td></tr>`).join('')}
+                        </tbody>
+                    </table>
+                </body>
+            </html>
+        `;
+        const win = window.open('', '_blank');
+        if (!win) return;
+        win.document.write(html);
+        win.document.close();
+        win.focus();
+        win.print();
+    }
+
+    const mappingDraftPayload = $derived.by(() => {
+        return JSON.stringify(unmatchedEvidenceFiles.map((file: any) => ({
+            id: file.id,
+            ...getMappingDraft(file)
+        })));
+    });
+
+    function statusMark(value: boolean) {
+        return value ? '1' : '-';
+    }
+
+    function escapeHtml(value: unknown) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    $effect(() => {
+        const latest = (data.participants ?? []).map((p: any) => `${p.order}\t${p.fullName}`).join('\n');
+        if (latest !== participantSourceText) {
+            participantSourceText = latest;
+            participantListText = latest;
+        }
+    });
+
+    function participantActionEnhance(successTitle: string, processingTitle: string) {
+        startProcessing(processingTitle);
+        return async ({ result, update }: any) => {
+            stopProcessing();
+            if (result.type === 'success') {
+                showToast(successTitle, (result.data as any)?.message ?? 'อัปเดตรายชื่อเรียบร้อยแล้ว', 'success');
+                participantAddOrder = '';
+                participantAddName = '';
+            } else {
+                showToast('อัปเดตรายชื่อไม่สำเร็จ', (result.data as any)?.message ?? 'เกิดข้อผิดพลาด', 'error');
+            }
+            await update();
+        };
+    }
+
+    function escapeXml(value: unknown) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
+    }
+
+    function xlsxTextCell(ref: string, value: unknown, style = 0) {
+        return `<c r="${ref}" s="${style}" t="inlineStr"><is><t>${escapeXml(value)}</t></is></c>`;
+    }
+
+    function xlsxNumberCell(ref: string, value: number, style = 0) {
+        return `<c r="${ref}" s="${style}" t="n"><v>${Number.isFinite(value) ? value : 0}</v></c>`;
+    }
+
+    function buildEvidenceWorksheetXml(rows: any[]) {
+        const bodyRows = rows.map((row, index) => {
+            const excelRow = index + 2;
+            return `<row r="${excelRow}">
+                ${typeof row.order === 'number' ? xlsxNumberCell(`A${excelRow}`, row.order, 2) : xlsxTextCell(`A${excelRow}`, row.order, 2)}
+                ${xlsxTextCell(`B${excelRow}`, row.fullName, 3)}
+                ${xlsxTextCell(`C${excelRow}`, statusMark(row.eve), row.eve ? 4 : 5)}
+                ${xlsxTextCell(`D${excelRow}`, statusMark(row.cer), row.cer ? 4 : 5)}
+            </row>`;
+        }).join('');
+
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>
+    <sheetFormatPr defaultColWidth="8.6796875" defaultRowHeight="15"/>
+    <cols>
+        <col min="1" max="1" width="8" customWidth="1"/>
+        <col min="2" max="2" width="32" customWidth="1"/>
+        <col min="3" max="4" width="10" customWidth="1"/>
+    </cols>
+    <sheetData>
+        <row r="1" ht="19.5" customHeight="1">
+            ${xlsxTextCell('A1', 'ลำดับ', 1)}
+            ${xlsxTextCell('B1', 'ชื่อ-นามสกุล', 1)}
+            ${xlsxTextCell('C1', 'ewe', 1)}
+            ${xlsxTextCell('D1', 'cer', 1)}
+        </row>
+        ${bodyRows}
+    </sheetData>
+    <autoFilter ref="A1:D${rows.length + 1}"/>
+    <pageMargins left="0.75" right="0.75" top="1" bottom="1" header="0.5" footer="0.5"/>
+</worksheet>`;
+    }
+
+    function buildSummaryWorksheetXml(rows: any[]) {
+        const total = rows.length;
+        const submittedEwe = rows.filter((row) => row.eve).length;
+        const submittedCer = rows.filter((row) => row.cer).length;
+        const submittedAny = rows.filter((row) => row.eve || row.cer).length;
+        const submittedAll = rows.filter((row) => row.eve && row.cer).length;
+        const submittedNone = rows.filter((row) => !row.eve && !row.cer).length;
+        const summaryRows = [
+            ['จำนวนรายชื่อทั้งหมด', total],
+            ['ส่ง ewe แล้ว', submittedEwe],
+            ['ส่ง cer แล้ว', submittedCer],
+            ['ส่งอย่างน้อย 1 รายการ', submittedAny],
+            ['ส่งครบ ewe และ cer', submittedAll],
+            ['ยังไม่ส่งทั้ง ewe และ cer', submittedNone],
+            ['ขาด ewe', total - submittedEwe],
+            ['ขาด cer', total - submittedCer]
+        ];
+
+        const bodyRows = summaryRows.map(([label, value], index) => {
+            const row = index + 2;
+            return `<row r="${row}">${xlsxTextCell(`A${row}`, label, 7)}${xlsxNumberCell(`B${row}`, value as number, 8)}</row>`;
+        }).join('');
+
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <sheetFormatPr defaultColWidth="8.6796875" defaultRowHeight="15"/>
+    <cols>
+        <col min="1" max="1" width="42" customWidth="1"/>
+        <col min="2" max="2" width="15" customWidth="1"/>
+    </cols>
+    <sheetData>
+        <row r="1">${xlsxTextCell('A1', 'หัวข้อ', 6)}${xlsxTextCell('B1', 'จำนวน', 6)}</row>
+        ${bodyRows}
+    </sheetData>
+    <pageMargins left="0.75" right="0.75" top="1" bottom="1" header="0.5" footer="0.5"/>
+</worksheet>`;
+    }
+
+    function buildWorkbookStylesXml() {
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <fonts count="5">
+        <font><sz val="10"/><name val="Arial"/></font>
+        <font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Arial"/></font>
+        <font><sz val="10"/><color rgb="FF006100"/><name val="Arial"/></font>
+        <font><sz val="10"/><color rgb="FF9C0006"/><name val="Arial"/></font>
+        <font><b/><sz val="10"/><name val="Arial"/></font>
+    </fonts>
+    <fills count="5">
+        <fill><patternFill patternType="none"/></fill>
+        <fill><patternFill patternType="gray125"/></fill>
+        <fill><patternFill patternType="solid"><fgColor rgb="FF305496"/><bgColor indexed="64"/></patternFill></fill>
+        <fill><patternFill patternType="solid"><fgColor rgb="FFC6EFCE"/><bgColor indexed="64"/></patternFill></fill>
+        <fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/><bgColor indexed="64"/></patternFill></fill>
+    </fills>
+    <borders count="2">
+        <border><left/><right/><top/><bottom/><diagonal/></border>
+        <border><left style="thin"><color rgb="FFB7B7B7"/></left><right style="thin"><color rgb="FFB7B7B7"/></right><top style="thin"><color rgb="FFB7B7B7"/></top><bottom style="thin"><color rgb="FFB7B7B7"/></bottom><diagonal/></border>
+    </borders>
+    <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+    <cellXfs count="9">
+        <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+        <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    </cellXfs>
+    <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+    }
+
+    async function downloadEvidenceXlsx() {
+        const rows = allEvidenceReportRows;
+        const JSZip = (await import('jszip')).default;
+        const zip = new JSZip();
+        zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+    <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+    <Default Extension="xml" ContentType="application/xml"/>
+    <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+    <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+    <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+    <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+    <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+    <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`);
+        zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+    <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+    <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`);
+        zip.file('xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+    <bookViews><workbookView activeTab="0"/></bookViews>
+    <sheets>
+        <sheet name="สรุปการส่งงาน" sheetId="1" r:id="rId1"/>
+        <sheet name="สรุปภาพรวม" sheetId="2" r:id="rId2"/>
+    </sheets>
+</workbook>`);
+        zip.file('xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+    <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+    <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`);
+        zip.file('xl/worksheets/sheet1.xml', buildEvidenceWorksheetXml(rows));
+        zip.file('xl/worksheets/sheet2.xml', buildSummaryWorksheetXml(rows));
+        zip.file('xl/styles.xml', buildWorkbookStylesXml());
+        zip.file('docProps/core.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <dc:title>สรุปการส่งงาน</dc:title>
+    <dc:creator>image_temp_upload</dc:creator>
+    <dcterms:created xsi:type="dcterms:W3CDTF">${new Date().toISOString()}</dcterms:created>
+</cp:coreProperties>`);
+        zip.file('docProps/app.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+    <Application>image_temp_upload</Application>
+</Properties>`);
+        const blob = await zip.generateAsync({
+            type: 'blob',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `สรุปการส่งงาน-${Date.now()}.xlsx`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    function printEvidenceReport() {
+        const rows = allEvidenceReportRows;
+        const html = `
+            <html>
+                <head>
+                    <title>evidence-report</title>
+                    <style>
+                        body { font-family: sans-serif; padding: 24px; color: #111827; }
+                        h1 { font-size: 18px; margin: 0 0 12px; }
+                        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+                        th, td { border: 1px solid #d1d5db; padding: 6px 8px; }
+                        th { background: #f3f4f6; text-align: left; }
+                        td.order { width: 56px; color: #4b5563; }
+                        td.status, th.status { width: 72px; text-align: center; }
+                        .mark { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 24px; border-radius: 6px; font-weight: 800; }
+                        .ok { color: #047857; background: #d1fae5; border: 1px solid #6ee7b7; }
+                        .missing { color: #b91c1c; background: #fee2e2; border: 1px solid #fecaca; }
+                        @media print {
+                            body { padding: 0; }
+                            .ok, .missing { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <h1>Evidence report (${rows.length})</h1>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ลำดับ</th>
+                                <th>ชื่อสกุล</th>
+                                <th class="status">ewe</th>
+                                <th class="status">cer</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows.map((row) => `
+                                <tr>
+                                    <td class="order">${row.order}</td>
+                                    <td>${escapeHtml(row.fullName)}</td>
+                                    <td class="status"><span class="mark ${row.eve ? 'ok' : 'missing'}">${statusMark(row.eve)}</span></td>
+                                    <td class="status"><span class="mark ${row.cer ? 'ok' : 'missing'}">${statusMark(row.cer)}</span></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </body>
+            </html>
+        `;
+        const win = window.open('', '_blank');
+        if (!win) return;
+        win.document.write(html);
+        win.document.close();
+        win.focus();
+        win.print();
+    }
+
+    async function downloadEvidenceZip() {
+        if (isProcessing) return;
+        startProcessing('กำลังสร้าง ZIP รายชื่อหลักฐาน 0/0');
+        try {
+            const JSZip = (await import('jszip')).default;
+            const zip = new JSZip();
+            const rows = allEvidenceReportRows;
+            const fileEntries = rows.flatMap((row: any) => [
+                ...row.eveFiles.map((file: any) => ({ row, file, type: 'eve' })),
+                ...row.cerFiles.map((file: any) => ({ row, file, type: 'cer' }))
+            ]);
+            const totalFiles = fileEntries.length;
+            let completed = 0;
+            let added = 0;
+
+            if (totalFiles === 0) {
+                showToast('ไม่มีไฟล์สำหรับ ZIP', 'ยังไม่มีไฟล์ที่ map กับรายชื่อหลัก', 'error');
+                return;
+            }
+
+            processingText = `กำลังแพคไฟล์ 0/${totalFiles}`;
+            let nextIndex = 0;
+            async function worker() {
+                while (nextIndex < fileEntries.length) {
+                    const entry = fileEntries[nextIndex++];
+                    try {
+                        const image = await getZipImageBlob(entry.file);
+                        zip.file(
+                            `${entry.type}/${formatEvidenceZipName(entry.type, entry.row.order, entry.row.fullName)}`,
+                            image.blob,
+                            { compression: 'STORE' }
+                        );
+                        added++;
+                    } catch (err) {
+                        console.error('Evidence ZIP file failed:', entry.file?.id, err);
+                    } finally {
+                        completed++;
+                        progressPercent = Math.max(progressPercent, Math.round((completed / totalFiles) * 90));
+                        processingText = `กำลังแพคไฟล์ ${completed}/${totalFiles}`;
+                    }
+                }
+            }
+            await Promise.all(Array.from(
+                { length: Math.min(ZIP_DOWNLOAD_CONCURRENCY, fileEntries.length) },
+                () => worker()
+            ));
+
+            if (added === 0) {
+                showToast('ไม่มีไฟล์สำหรับ ZIP', 'ไม่สามารถโหลดไฟล์ที่ map กับรายชื่อหลักได้', 'error');
+                return;
+            }
+
+            processingText = `กำลังสร้างไฟล์ ZIP ${added}/${totalFiles}`;
+            const content = await zip.generateAsync({ type: 'blob', compression: 'STORE' }, (metadata) => {
+                progressPercent = Math.max(progressPercent, Math.round(90 + (metadata.percent / 100) * 10));
+            });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(content);
+            link.download = `evidence-renamed-${Date.now()}.zip`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            showToast('สร้าง ZIP สำเร็จ', `rename และแพคไฟล์ ${added}/${totalFiles} รายการแล้ว`, 'success');
+        } finally {
+            stopProcessing();
+        }
+    }
+
     // Collections excluding deleted-drive
     const realCollections = $derived(data.collections.filter((c: any) => c.id !== 'deleted-drive'));
     const activeCollections = $derived(realCollections.filter((c: any) => !c.name.endsWith('_deleted')));
@@ -647,6 +1160,7 @@
                 return async ({ result, update }) => {
                     isLoggingIn = false;
                     if (result.type === 'success') {
+                        startProcessing('กำลังโหลดข้อมูลหลังบ้าน...');
                         loginError = '';
                         data.loggedIn = true;
                         data.userRole = (result.data as any)?.role || '';
@@ -660,6 +1174,7 @@
                         showToast('เข้าสู่ระบบล้มเหลว', loginError, 'error');
                     }
                     await update();
+                    if (isProcessing) stopProcessing();
                 };
             }} class="space-y-4">
                 <div class="space-y-2">
@@ -697,7 +1212,7 @@
     </section>
 {:else}
 <!-- Admin Dashboard Section -->
-<section class="space-y-6 w-full animate-fade-in">
+<section class="space-y-6 w-full animate-fade-in min- ">
     <!-- Admin title & buttons -->
     <div class="flex flex-col md:flex-row md:items-center md:justify-between border-b border-zinc-800 pb-5 gap-4">
         <!-- <div>
@@ -719,7 +1234,7 @@
                 <FolderPlus class="w-4 h-4 text-brand-500" />
                 <span>เพิ่มหัวข้อใหม่</span>
             </button>
-            <button onclick={() => isDownloadZipModalOpen = true} class="bg-brand-600 hover:bg-brand-700 px-4 py-2.5 rounded-xl text-sm font-medium transition-all text-white flex items-center space-x-2 shadow-lg shadow-brand-600/10 animate-none">
+            <button onclick={downloadEvidenceZip} disabled={isProcessing} class="bg-brand-600 hover:bg-brand-700 px-4 py-2.5 rounded-xl text-sm font-medium transition-all text-white flex items-center space-x-2 shadow-lg shadow-brand-600/10 animate-none disabled:opacity-50 disabled:pointer-events-none">
                 <Download class="w-4 h-4" />
                 <span>ดาวน์โหลด ZIP</span>
             </button>
@@ -802,6 +1317,22 @@
         </div>
     </div>
 
+    <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-950/40 p-2">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {#each workspaceTabs as tab (tab.id)}
+                {@const count = tab.id === 'participants' ? participantRows.length : tab.id === 'mapping' ? unmatchedEvidenceFiles.length : tab.id === 'files' ? data.submissions.filter((s: any) => !isDeletedDriveSubmission(s) && !s.is_deleted).length : tab.id === 'overview' ? evidenceStats.total : activeCollections.length}
+                <button
+                    type="button"
+                    onclick={() => switchWorkspaceTab(tab.id)}
+                    class="min-h-14 rounded-xl border px-3 py-2 text-left transition-all {adminWorkspaceTab === tab.id ? 'border-brand-500 bg-brand-500/10 text-zinc-950 dark:text-white shadow-sm' : 'border-transparent hover:border-zinc-300 dark:hover:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-900/70'}"
+                >
+                    <div class="text-sm font-bold">{tab.label}</div>
+                    <div class="text-[11px] text-zinc-500">{count} รายการ</div>
+                </button>
+            {/each}
+        </div>
+    </div>
+
     <!-- Quota Alert Banner -->
     {#if overQuotaCollections.length > 0 || nearQuotaCollections.length > 0}
         <div class="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex flex-col gap-2 shadow-inner">
@@ -822,11 +1353,185 @@
 
 
 
+    <!-- Evidence report section -->
+    {#if adminWorkspaceTab !== 'files'}
+    <div class="evidence-report-section glass rounded-2xl border border-zinc-800 overflow-hidden print:block">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 p-4 border-b border-zinc-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-950/30">
+            <div>
+                <h3 class="text-sm font-bold text-white">{adminWorkspaceTab === 'participants' ? 'จัดการรายชื่อ' : adminWorkspaceTab === 'mapping' ? 'ตรวจ mapping' : 'Evidence report'}</h3>
+                <p class="text-[11px] text-zinc-500">{adminWorkspaceTab === 'participants' ? 'นำเข้า XLSX เพิ่ม แทรก หรือบันทึกรายชื่อหลักในฐานข้อมูล' : adminWorkspaceTab === 'mapping' ? 'ตรวจไฟล์ที่ชื่อไม่ตรงฐานข้อมูลหรือ folder ไม่ชัดเจน' : 'รวมทุก group เป็น eve / cer และนับชื่อที่ลงท้าย (1)(2)(3) เป็นคนเดียวกัน'}</p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                {#if adminWorkspaceTab === 'overview'}
+                    <button type="button" onclick={downloadEvidenceXlsx} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">XLSX</button>
+                    <button type="button" onclick={printEvidenceReport} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">Print/PDF</button>
+                {/if}
+            </div>
+        </div>
+
+        {#if isEvidencePanelOpen}
+            <div class="{adminWorkspaceTab === 'overview' ? 'grid grid-cols-1 xl:grid-cols-[340px_1fr] gap-0' : 'grid grid-cols-1 gap-0'}">
+                <div class="p-4 border-b xl:border-b-0 xl:border-r border-zinc-200 dark:border-zinc-800 space-y-3">
+                    {#if adminWorkspaceTab === 'participants'}
+                    <div class="space-y-2">
+                        <div class="flex items-center justify-between gap-2">
+                            <label for="participant-list-text" class="block text-xs font-semibold text-zinc-400">รายชื่อหลักในฐานข้อมูล</label>
+                            <span class="text-[10px] text-zinc-500">{participantRows.length} รายชื่อ</span>
+                        </div>
+                        <div class="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950/40 px-3 py-2 text-[11px] text-zinc-500 dark:text-zinc-400">
+                            source: {data.participantsMeta?.source ?? '-'} · db rows: {data.participantsMeta?.databaseCount ?? 0} · loaded: {data.participantsMeta?.loadedCount ?? participantRows.length}
+                            {#if data.participantsMeta?.error}
+                                <div class="mt-1 text-rose-500 break-words">{data.participantsMeta.error}</div>
+                            {/if}
+                        </div>
+                        <form method="POST" action="?/importParticipantsXlsx" enctype="multipart/form-data" class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-3 space-y-2" use:enhance={() => participantActionEnhance('นำเข้า XLSX สำเร็จ', 'กำลังนำเข้ารายชื่อจาก XLSX...')}>
+                            <input id="participant-xlsx-input" name="participant_file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="block w-full text-xs text-zinc-600 dark:text-zinc-300 file:mr-3 file:rounded-lg file:border-0 file:bg-brand-600 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white hover:file:bg-brand-700" required>
+                            <button type="submit" disabled={isProcessing} class="w-full px-3 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-xs text-white font-semibold">อัปเดตรายชื่อจาก XLSX</button>
+                        </form>
+                        <form method="POST" action="?/addParticipant" class="grid grid-cols-[76px_1fr_auto] gap-2" use:enhance={() => participantActionEnhance('เพิ่มรายชื่อสำเร็จ', 'กำลังเพิ่มรายชื่อ...')}>
+                            <input name="order" bind:value={participantAddOrder} inputmode="numeric" placeholder="แทรกที่" title="เว้นว่างเพื่อต่อท้าย หรือกรอกเลขเพื่อแทรกที่ลำดับนั้น" class="bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-900 dark:text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-brand-500">
+                            <input name="full_name" bind:value={participantAddName} placeholder="ชื่อ-สกุล" class="bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-900 dark:text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-brand-500" required>
+                            <button type="submit" disabled={isProcessing} class="px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs font-semibold text-zinc-700 dark:text-zinc-200 disabled:opacity-50">เพิ่ม</button>
+                        </form>
+                        <form method="POST" action="?/saveParticipants" class="space-y-2" use:enhance={() => participantActionEnhance('บันทึกรายชื่อสำเร็จ', 'กำลังบันทึกรายชื่อ...')}>
+                            <textarea id="participant-list-text" name="participant_list" bind:value={participantListText} rows="10" placeholder="วางรายชื่อ 1 บรรทัดต่อ 1 คน เช่น&#10;1 นาย ก&#10;2 นางสาว ข" class="w-full bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl p-3 text-xs text-zinc-900 dark:text-zinc-200 placeholder-zinc-500 dark:placeholder-zinc-600 focus:outline-none focus:border-brand-500"></textarea>
+                            <button type="submit" disabled={isProcessing} class="w-full px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-xs text-white font-semibold">บันทึกรายชื่อทั้งหมด</button>
+                        </form>
+                    </div>
+                    {/if}
+                    {#if adminWorkspaceTab === 'overview'}
+                    <div class="grid grid-cols-1 gap-2 text-xs">
+                        <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-3">
+                            <div class="text-zinc-500">ทั้งหมด</div>
+                            <div class="text-lg font-black text-zinc-950 dark:text-white">{evidenceStats.total} รายชื่อ</div>
+                        </div>
+                        <div class="rounded-xl border border-emerald-200 dark:border-emerald-500/20 bg-white dark:bg-emerald-500/10 p-3 shadow-sm dark:shadow-none">
+                            <div class="text-emerald-700 dark:text-emerald-300">ครบ</div>
+                            <div class="text-lg font-black text-emerald-700 dark:text-emerald-300">{evidenceStats.complete}</div>
+                        </div>
+                        <div class="rounded-xl border border-amber-200 dark:border-amber-500/20 bg-white dark:bg-amber-500/10 p-3 shadow-sm dark:shadow-none">
+                            <div class="text-amber-700 dark:text-amber-300 font-semibold">eve</div>
+                            <div class="text-base font-black text-zinc-950 dark:text-zinc-100">ส่งแล้ว {evidenceStats.submittedEve}/{evidenceStats.total}</div>
+                            <div class="text-[11px] text-amber-700 dark:text-amber-300">ขาด {evidenceStats.missingEve}</div>
+                        </div>
+                        <div class="rounded-xl border border-amber-200 dark:border-amber-500/20 bg-white dark:bg-amber-500/10 p-3 shadow-sm dark:shadow-none">
+                            <div class="text-amber-700 dark:text-amber-300 font-semibold">cer</div>
+                            <div class="text-base font-black text-zinc-950 dark:text-zinc-100">ส่งแล้ว {evidenceStats.submittedCer}/{evidenceStats.total}</div>
+                            <div class="text-[11px] text-amber-700 dark:text-amber-300">ขาด {evidenceStats.missingCer}</div>
+                        </div>
+                    </div>
+                    {/if}
+
+                    {#if adminWorkspaceTab === 'mapping'}
+                        <div class="space-y-2 pt-2">
+                            <div class="text-xs font-semibold text-amber-300">ไฟล์ที่ต้องตรวจ mapping ({unmatchedEvidenceFiles.length})</div>
+                            {#if unmatchedEvidenceFiles.length === 0}
+                                <div class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-xs text-emerald-300">ไม่มีไฟล์ที่ต้องตรวจ mapping ตอนนี้</div>
+                            {:else}
+                            <form method="POST" action="?/updateSubmissionMappings" use:enhance={() => {
+                                startProcessing('กำลังบันทึก mapping ทั้งหมด...');
+                                return async ({ result, update }) => {
+                                    stopProcessing();
+                                    if (result.type === 'success') {
+                                        mappingDrafts = {};
+                                        showToast('บันทึกทั้งหมดแล้ว', (result.data as any)?.message || 'อัปเดต mapping ทุกไฟล์เรียบร้อย', 'success');
+                                    } else {
+                                        // @ts-ignore
+                                        showToast('บันทึกทั้งหมดไม่สำเร็จ', result.data?.message || 'กรุณาลองใหม่', 'error');
+                                    }
+                                    await update();
+                                };
+                            }}>
+                                <input type="hidden" name="mappings" value={mappingDraftPayload}>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button type="submit" class="px-3 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold">บันทึกทั้งหมด</button>
+                                    <button type="button" onclick={printUnmatchedEvidenceFiles} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 text-xs font-semibold">PDF รายชื่อไม่เจอ</button>
+                                </div>
+                            </form>
+                            <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
+                                {#each unmatchedEvidenceFiles as file (file.id)}
+                                    {@const draft = getMappingDraft(file)}
+                                    <form method="POST" action="?/updateSubmissionMapping" use:enhance={() => {
+                                        startProcessing('กำลังอัปเดต mapping...');
+                                        return async ({ result, update }) => {
+                                            stopProcessing();
+                                            if (result.type === 'success') {
+                                                showToast('อัปเดตแล้ว', 'แก้ชื่อหรือประเภทไฟล์เรียบร้อย', 'success');
+                                            } else {
+                                                // @ts-ignore
+                                                showToast('อัปเดตไม่สำเร็จ', result.data?.message || 'กรุณาลองใหม่', 'error');
+                                            }
+                                            await update();
+                                        };
+                                    }} class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-2 space-y-2">
+                                        <input type="hidden" name="id" value={file.id}>
+                                        <input name="name" value={draft.name} oninput={(e) => updateMappingDraft(file, { name: e.currentTarget.value })} class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-zinc-200">
+                                        <div class="flex gap-2">
+                                            <select name="evidence_type" value={draft.evidence_type} onchange={(e) => updateMappingDraft(file, { evidence_type: e.currentTarget.value as 'eve' | 'cer' })} class="flex-1 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-zinc-200">
+                                                <option value="eve">eve</option>
+                                                <option value="cer">cer</option>
+                                            </select>
+                                            <button type="submit" class="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-semibold">บันทึก</button>
+                                        </div>
+                                    </form>
+                                {/each}
+                            </div>
+                            {/if}
+                        </div>
+                    {/if}
+                </div>
+
+                {#if adminWorkspaceTab === 'overview'}
+                <div class="p-4 space-y-3">
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input bind:value={evidenceSearch} placeholder="ค้นหาลำดับหรือชื่อ" class="flex-1 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-900 dark:text-zinc-200 placeholder-zinc-500 dark:placeholder-zinc-600 focus:outline-none focus:border-brand-500">
+                        <select bind:value={evidenceFilter} class="bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-900 dark:text-zinc-200">
+                            <option value="all">ทั้งหมด</option>
+                            <option value="missing">ยังไม่ครบ</option>
+                            <option value="missing-eve">ขาด eve</option>
+                            <option value="missing-cer">ขาด cer</option>
+                            <option value="complete">ครบแล้ว</option>
+                        </select>
+                    </div>
+                    <div class="overflow-auto rounded-xl border border-zinc-200 dark:border-zinc-800 max-h-[520px] print:max-h-none">
+                        <table class="w-full text-xs print:text-[11px]">
+                            <thead class="sticky top-0 bg-zinc-100 dark:bg-zinc-950 text-zinc-500 dark:text-zinc-400 print:static">
+                                <tr>
+                                    <th class="text-left p-2 w-16">ลำดับ</th>
+                                    <th class="text-left p-2">ชื่อ-สกุล</th>
+                                    <th class="text-center p-2 w-20">eve</th>
+                                    <th class="text-center p-2 w-20">cer</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {#each evidenceReportRows as row (`${row.order}-${row.key}`)}
+                                    <tr class="border-t border-zinc-200 dark:border-zinc-900">
+                                        <td class="p-2 text-zinc-500 dark:text-zinc-400">{row.order}</td>
+                                        <td class="p-2 text-zinc-950 dark:text-zinc-100">{row.fullName}</td>
+                                        <td class="p-2 text-center">
+                                            <span class="inline-flex items-center justify-center w-7 h-7 rounded-lg font-black {row.eve ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25' : 'bg-zinc-900 text-zinc-600 border border-zinc-800'}">{statusMark(row.eve)}</span>
+                                        </td>
+                                        <td class="p-2 text-center">
+                                            <span class="inline-flex items-center justify-center w-7 h-7 rounded-lg font-black {row.cer ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25' : 'bg-zinc-900 text-zinc-600 border border-zinc-800'}">{statusMark(row.cer)}</span>
+                                        </td>
+                                    </tr>
+                                {/each}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                {/if}
+            </div>
+        {/if}
+    </div>
+    {/if}
+
     <!-- Explorer section -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    {#if adminWorkspaceTab === 'files'}
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 min- ">
         <!-- Left panel: Collections manager -->
         {#if isCollectionsPanelOpen}
-            <div class="lg:col-span-1 space-y-4">
+            <div class="lg:col-span-1 space-y-4 min-h-full">
                 <div class="glass p-5 rounded-2xl space-y-4">
                     <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
                         <h3 class="font-bold text-sm text-zinc-200">หัวข้อส่งรูป</h3>
@@ -834,7 +1539,7 @@
                     </div>
 
                     <!-- Active Collections -->
-                    <div class="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                    <div class="space-y-2 overflow-y-auto pr-1">
                         {#each activeCollections as col (col.id)}
                             {@const count = data.submissions.filter((s: any) => s.collection_id === col.id && !s.is_deleted).length}
                             <div class="flex flex-col p-3 rounded-xl border border-zinc-800 bg-zinc-900/30 hover:bg-zinc-800/20 transition-all gap-2">
@@ -985,8 +1690,9 @@
         {/if}
 
         <!-- Right panel: Explorer -->
+        {#if adminWorkspaceTab === 'files'}
         <div class="{isCollectionsPanelOpen ? 'lg:col-span-2' : 'lg:col-span-3'} space-y-4 transition-all duration-300">
-            <div class="glass rounded-2xl border border-zinc-800 overflow-hidden flex flex-col min-h-[480px]">
+            <div class="glass rounded-2xl border border-zinc-800 overflow-hidden flex flex-col h-140">
                 <!-- Header bar -->
                 <div class="bg-zinc-900/95 border-b border-zinc-800 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs">
                     <div class="flex items-center space-x-2.5">
@@ -1088,33 +1794,13 @@
                             <span class="truncate">Root /</span>
                         </button>
                         {#each data.collections as col (col.id)}
-                            {@const colSubmissions = data.submissions.filter((s: any) => s.collection_id === col.id)}
-                            {@const groups = [...new Set<string>(colSubmissions.map((s: any) => s.group_name))]}
-                            {@const isExpanded = expandedCollections[col.id] !== undefined ? expandedCollections[col.id] : (currentExplorerPath[0] === col.name)}
                             <div class="space-y-1">
                                 <div class="flex items-center w-full rounded hover:bg-zinc-800 hover:text-white transition-all group/item {currentExplorerPath.length === 1 && currentExplorerPath[0] === col.name ? 'bg-zinc-800 text-white font-medium' : ''}">
-                                    <button onclick={() => toggleCollectionExpand(col.id)} class="p-1.5 text-zinc-500 hover:text-zinc-300 focus:outline-none shrink-0">
-                                        {#if isExpanded}
-                                            <ChevronDown class="w-3 h-3" />
-                                        {:else}
-                                            <ChevronRight class="w-3 h-3" />
-                                        {/if}
-                                    </button>
                                     <button onclick={() => navigateToPath([col.name])} class="flex items-center space-x-1.5 py-1 px-1 flex-1 text-left truncate">
                                         <Folder class="w-3.5 h-3.5 {col.id === 'deleted-drive' ? 'text-rose-500' : (col.name.endsWith('_deleted') ? 'text-zinc-600' : 'text-amber-500')} shrink-0" />
                                         <span class="truncate {col.name.endsWith('_deleted') ? 'line-through text-zinc-600' : ''}">/{col.id === 'deleted-drive' ? 'deleted' : col.name}</span>
                                     </button>
                                 </div>
-                                {#if isExpanded && groups.length > 0}
-                                    <div class="pl-4.5 space-y-1 border-l border-zinc-800 ml-5 my-1">
-                                        {#each groups as gp}
-                                            <button onclick={() => navigateToPath([col.name, gp])} class="flex items-center space-x-2 py-0.5 px-1.5 w-full rounded hover:bg-zinc-800 hover:text-white transition-all text-[10px] {currentExplorerPath.length === 2 && currentExplorerPath[0] === col.name && currentExplorerPath[1] === gp ? 'bg-zinc-800 text-white font-semibold' : 'text-zinc-500'}">
-                                                <Folder class="w-3 h-3 text-brand-500 shrink-0" />
-                                                <span class="truncate">{gp}</span>
-                                            </button>
-                                        {/each}
-                                    </div>
-                                {/if}
                             </div>
                         {/each}
                     </div>
@@ -1146,11 +1832,14 @@
                                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                                     <div onclick={() => openAdminLightbox(it.id)} class="flex flex-col rounded-xl overflow-hidden border cursor-pointer select-none transition-all group relative w-[130px] shrink-0 {selectedExplorerIds.has(it.id) ? 'border-brand-500 bg-brand-500/10' : 'border-zinc-900 bg-zinc-900/30 hover:bg-zinc-800/20 hover:border-zinc-800'}">
                                         <div class="h-24 bg-zinc-950/80 flex items-center justify-center overflow-hidden border-b border-zinc-900/80 relative">
-                                            <img src={it.img_data} class="object-cover w-full h-full group-hover:scale-105 transition-transform duration-300" alt="Thumbnail">
+                                            <img src={it.img_data} loading="lazy" decoding="async" class="object-cover w-full h-full group-hover:scale-105 transition-transform duration-300" alt="Thumbnail">
                                             <button onclick={(e) => toggleSelectFile(it.id, e)} class="absolute top-2 left-2 z-10 p-1 rounded hover:bg-zinc-900/80" title="เลือก">
                                                 <input type="checkbox" checked={selectedExplorerIds.has(it.id)} class="rounded border-zinc-700 bg-zinc-900 text-brand-600 focus:ring-brand-500 pointer-events-none w-4 h-4 shadow">
                                             </button>
-                                            <span class="absolute bottom-1 right-1.5 text-[9px] bg-zinc-950/70 text-zinc-400 px-1 py-0.5 rounded font-mono">{it.subText}</span>
+                                            <button onclick={(e) => openSubmissionMappingEditor(it, e)} class="absolute top-2 right-2 z-10 p-1.5 rounded bg-zinc-950/70 text-zinc-300 hover:text-white hover:bg-zinc-800/90 opacity-0 group-hover:opacity-100 transition-all" title="แก้ชื่อหรือ folder">
+                                                <MoreVertical class="w-3.5 h-3.5" />
+                                            </button>
+                                            <!-- <span class="absolute bottom-1 right-1.5 text-[9px] bg-zinc-950/70 text-zinc-400 px-1 py-0.5 rounded font-mono">{it.subText}</span> -->
                                         </div>
                                         <div class="p-2 text-left space-y-0.5">
                                             <p class="text-[10px] font-semibold text-zinc-200 truncate group-hover:text-white" title={it.name}>{it.name}</p>
@@ -1169,8 +1858,56 @@
                 </div>
             </div>
         </div>
+        {/if}
     </div>
+    {/if}
 </section>
+
+<!-- Modal: Add New Collection -->
+{#if editingSubmission}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+        <div class="glass max-w-sm w-full rounded-2xl p-6 shadow-2xl relative border border-zinc-800 space-y-4">
+            <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+                <h3 class="text-sm font-bold text-white">แก้ชื่อ / folder</h3>
+                <button onclick={() => editingSubmission = null} class="text-zinc-500 hover:text-white">
+                    <Trash2 class="w-4 h-4 rotate-45" />
+                </button>
+            </div>
+
+            <form method="POST" action="?/updateSubmissionMapping" use:enhance={() => {
+                startProcessing('กำลังอัปเดตไฟล์...');
+                return async ({ result, update }) => {
+                    stopProcessing();
+                    if (result.type === 'success') {
+                        showToast('อัปเดตแล้ว', 'แก้ชื่อหรือ folder เรียบร้อย', 'success');
+                        editingSubmission = null;
+                    } else {
+                        // @ts-ignore
+                        showToast('อัปเดตไม่สำเร็จ', result.data?.message || 'กรุณาลองใหม่', 'error');
+                    }
+                    await update();
+                };
+            }} class="space-y-3">
+                <input type="hidden" name="id" value={editingSubmission.id}>
+                <label class="block text-xs font-semibold text-zinc-400 space-y-1">
+                    <span>ชื่อ-สกุล</span>
+                    <input name="name" bind:value={editingSubmissionName} class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-zinc-200">
+                </label>
+                <label class="block text-xs font-semibold text-zinc-400 space-y-1">
+                    <span>folder</span>
+                    <select name="evidence_type" bind:value={editingSubmissionType} class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-900 dark:text-zinc-200">
+                        <option value="eve">eve</option>
+                        <option value="cer">cer</option>
+                    </select>
+                </label>
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" onclick={() => editingSubmission = null} class="px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs">ยกเลิก</button>
+                    <button type="submit" class="px-4 py-2 rounded-lg bg-brand-600 text-white text-xs font-semibold">บันทึก</button>
+                </div>
+            </form>
+        </div>
+    </div>
+{/if}
 
 <!-- Modal: Add New Collection -->
 {#if isAddColModalOpen}
@@ -1275,7 +2012,7 @@
             </button>
 
             <div class="flex flex-col items-center space-y-4 max-w-full">
-                <img src={file.img_data} class="max-h-[70vh] max-w-full w-auto object-contain rounded-lg shadow-2xl border border-zinc-800 select-none" alt={file.name}>
+                <img src={file.img_data} loading="lazy" decoding="async" class="max-h-[70vh] max-w-full w-auto object-contain rounded-lg shadow-2xl border border-zinc-800 select-none" alt={file.name}>
                 <div class="text-center space-y-1 bg-zinc-950/80 p-4 rounded-2xl border border-zinc-900 w-full max-w-lg" style="background: rgba(9, 9, 11, 0.85) !important; border-color: rgba(63, 63, 70, 0.4) !important;">
                     <h4 class="text-sm font-semibold" style="color: #ffffff !important;">{file.name}</h4>
                     <p class="text-xs" style="color: #a1a1aa !important;">เส้นทาง: images/{file.file_path} | ขนาดเดิม: {formatBytes(file.original_size)}</p>

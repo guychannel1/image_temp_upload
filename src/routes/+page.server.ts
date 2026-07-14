@@ -5,6 +5,8 @@ import { createSession, destroySession, getCurrentUser } from '$lib/server/auth'
 import { fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 import { createHash } from 'crypto';
+import { readFile } from 'fs/promises';
+import { findEvidenceForName, parseParticipantList } from '$lib/evidence';
 
 /**
  * Computes SHA-256 hash of a string.
@@ -25,16 +27,296 @@ function canViewSubmissions(role: string): role is 'admin' | 'staff' {
     return role === 'admin' || role === 'staff';
 }
 
+const PUBLIC_EVIDENCE_COLLECTIONS = [
+    { id: 'eve', name: 'eve', is_active: true, submission_limit: 500 },
+    { id: 'cer', name: 'cer', is_active: true, submission_limit: 500 }
+];
+
+function evidenceAliases(type: string) {
+    if (type === 'eve') return ['eve', 'ewe', 'evidence'];
+    if (type === 'cer') return ['cer', 'cert', 'certificate'];
+    return [type];
+}
+
+function normalizeEvidenceType(value: string | null | undefined) {
+    const lower = (value ?? '').trim().toLowerCase();
+    if (evidenceAliases('eve').includes(lower)) return 'eve';
+    if (evidenceAliases('cer').includes(lower)) return 'cer';
+    return '';
+}
+
+async function loadParticipantsFromListFile() {
+    try {
+        const text = await readFile('list.md', 'utf8');
+        return parseParticipantList(text);
+    } catch (err: any) {
+        if (err?.code !== 'ENOENT') {
+            console.error('Failed to load list.md:', err);
+        }
+        return [];
+    }
+}
+
+function participantRecordsToParticipants(records: any[]) {
+    return records
+        .map((row, index) => ({
+            order: Number(row.list_order ?? row.order ?? index + 1),
+            fullName: String(row.full_name ?? row.fullName ?? row.name ?? '').trim().replace(/\s+/g, ' ')
+        }))
+        .filter((row) => row.fullName.length > 0)
+        .sort((a, b) => a.order - b.order)
+        .map((row, index) => ({ order: Number.isFinite(row.order) && row.order > 0 ? row.order : index + 1, fullName: row.fullName }));
+}
+
+async function loadParticipants(loggedIn: boolean) {
+    const fileParticipants = await loadParticipantsFromListFile();
+    if (!loggedIn) {
+        return {
+            participants: fileParticipants,
+            meta: { source: 'list.md', databaseCount: 0, loadedCount: fileParticipants.length, error: '' }
+        };
+    }
+
+    if (isSupabaseConfigured && supabase) {
+        try {
+            let response = await supabase
+                .from('participants')
+                .select('id, list_order, full_name, created_at')
+                .order('list_order', { ascending: true })
+                .range(0, 5000);
+            if (response.error) {
+                response = await supabase
+                    .from('participants')
+                    .select('*')
+                    .range(0, 5000);
+            }
+
+            const { data, error } = response;
+            if (error) throw error;
+            const participants = participantRecordsToParticipants(data ?? []);
+            if (participants.length > 0) {
+                return {
+                    participants,
+                    meta: {
+                        source: 'database',
+                        databaseCount: data?.length ?? participants.length,
+                        loadedCount: participants.length,
+                        error: ''
+                    }
+                };
+            }
+
+            return {
+                participants: fileParticipants,
+                meta: { source: 'list.md-empty-db', databaseCount: 0, loadedCount: fileParticipants.length, error: '' }
+            };
+        } catch (err: any) {
+            console.error('Failed to load participants from Supabase:', err);
+            return {
+                participants: fileParticipants,
+                meta: {
+                    source: 'list.md-error',
+                    databaseCount: 0,
+                    loadedCount: fileParticipants.length,
+                    error: err?.message ?? String(err)
+                }
+            };
+        }
+    }
+
+    const participants = participantRecordsToParticipants(mockDb.participants);
+    return {
+        participants: participants.length > 0 ? participants : fileParticipants,
+        meta: {
+            source: participants.length > 0 ? 'mock-db' : 'list.md-empty-mock',
+            databaseCount: participants.length,
+            loadedCount: participants.length > 0 ? participants.length : fileParticipants.length,
+            error: ''
+        }
+    };
+}
+
+function decodeXml(value: string) {
+    return value
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&amp;/g, '&');
+}
+
+function extractXmlText(xml: string) {
+    return decodeXml(
+        Array.from(xml.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g))
+            .map((match) => match[1])
+            .join('')
+            .replace(/<[^>]+>/g, '')
+    ).trim();
+}
+
+async function parseParticipantsXlsx(file: File) {
+    const JSZip = (await import('jszip')).default;
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    const sheetXml = await zip.file('xl/worksheets/sheet1.xml')?.async('string');
+    if (!sheetXml) {
+        throw new Error('ไม่พบ sheet แรกในไฟล์ XLSX');
+    }
+
+    const sharedXml = await zip.file('xl/sharedStrings.xml')?.async('string');
+    const sharedStrings = sharedXml
+        ? Array.from(sharedXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)).map((match) => extractXmlText(match[1]))
+        : [];
+
+    const parsedRows = Array.from(sheetXml.matchAll(/<row\b[^>]*r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g)).map((rowMatch) => {
+        const cells: Record<string, string> = {};
+        for (const cellMatch of rowMatch[2].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+            const attrs = cellMatch[1];
+            const body = cellMatch[2];
+            const ref = attrs.match(/\br="([A-Z]+)\d+"/)?.[1] ?? '';
+            const type = attrs.match(/\bt="([^"]+)"/)?.[1] ?? '';
+            const rawValue = body.match(/<v>([\s\S]*?)<\/v>/)?.[1] ?? '';
+            let value = '';
+            if (type === 's') {
+                value = sharedStrings[Number(rawValue)] ?? '';
+            } else if (type === 'inlineStr') {
+                value = extractXmlText(body);
+            } else {
+                value = decodeXml(rawValue);
+            }
+            if (ref) cells[ref] = value.trim();
+        }
+        return cells;
+    });
+
+    const firstDataIndex = parsedRows.findIndex((row) => {
+        const values = Object.values(row).join(' ').toLowerCase();
+        return values.includes('ชื่อ') || values.includes('name');
+    });
+    const rows = (firstDataIndex >= 0 ? parsedRows.slice(firstDataIndex + 1) : parsedRows)
+        .map((row, index) => {
+            const order = Number.parseInt(row.A ?? '', 10);
+            const name = (row.B || Object.entries(row).find(([col, value]) => col !== 'A' && !/^\d+$/.test(value))?.[1] || '').trim();
+            return {
+                order: Number.isFinite(order) && order > 0 ? order : index + 1,
+                fullName: name.replace(/\s+/g, ' ')
+            };
+        })
+        .filter((row) => row.fullName.length > 0);
+
+    if (rows.length === 0) {
+        throw new Error('ไม่พบรายชื่อในไฟล์ XLSX');
+    }
+    return rows;
+}
+
+async function replaceParticipants(rows: Array<{ order: number; fullName: string }>) {
+    const normalizedRows = rows
+        .map((row, index) => ({
+            order: Number.isFinite(row.order) && row.order > 0 ? row.order : index + 1,
+            fullName: row.fullName.trim().replace(/\s+/g, ' ')
+        }))
+        .filter((row) => row.fullName.length > 0)
+        .sort((a, b) => a.order - b.order)
+        .map((row, index) => ({ order: index + 1, fullName: row.fullName }));
+
+    if (normalizedRows.length === 0) {
+        throw new Error('ไม่มีรายชื่อสำหรับบันทึก');
+    }
+
+    if (isSupabaseConfigured && supabase) {
+        const { error: deleteError } = await supabase
+            .from('participants')
+            .delete()
+            .not('id', 'is', null);
+        if (deleteError) throw deleteError;
+
+        const { error: insertError } = await supabase
+            .from('participants')
+            .insert(normalizedRows.map((row) => ({
+                list_order: row.order,
+                full_name: row.fullName
+            })));
+        if (insertError) throw insertError;
+    } else {
+        mockDb.replaceParticipants(normalizedRows);
+    }
+
+    return normalizedRows;
+}
+
+async function addParticipant(fullName: string, order?: number) {
+    const cleanName = fullName.trim().replace(/\s+/g, ' ');
+    if (!cleanName) throw new Error('กรุณากรอกชื่อ-สกุล');
+
+    if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+            .from('participants')
+            .select('id, list_order, full_name, created_at')
+            .order('list_order', { ascending: true });
+        if (error) throw error;
+
+        const rows = participantRecordsToParticipants(data ?? []);
+        const insertIndex = order && order > 0
+            ? Math.min(Math.max(order - 1, 0), rows.length)
+            : rows.length;
+        rows.splice(insertIndex, 0, { order: insertIndex + 1, fullName: cleanName });
+        await replaceParticipants(rows);
+    } else {
+        mockDb.addParticipant(cleanName, order);
+    }
+}
+
+async function resolveCollectionByEvidenceType(type: string) {
+    const normalizedType = normalizeEvidenceType(type);
+    if (!normalizedType) return null;
+    const aliases = evidenceAliases(normalizedType);
+
+    if (isSupabaseConfigured && supabase) {
+        const { data: cols, error } = await supabase
+            .from('collections')
+            .select('id, name, submission_limit')
+            .eq('is_active', true)
+            .in('name', aliases)
+            .limit(1);
+        if (error) throw error;
+        const col = cols?.[0];
+        return col ? { id: col.id, name: col.name, submission_limit: col.submission_limit ?? 500 } : null;
+    }
+
+    const col = mockDb.collections.find(c => c.is_active && aliases.includes(c.name.toLowerCase()));
+    return col ? { id: col.id, name: col.name, submission_limit: col.submission_limit ?? 500 } : null;
+}
+
 export const load: PageServerLoad = async ({ cookies }) => {
     const currentUser = await getCurrentUser(cookies);
     const loggedIn = !!currentUser;
     const username = currentUser?.username || '';
     const userRole = currentUser?.role || '';
+    const participantLoad = await loadParticipants(loggedIn);
+    const participants = participantLoad.participants;
 
     let collectionsList: any[] = [];
     let submissionsList: any[] = [];
     let collectionStats: Record<string, { count: number; totalFileSize: number }> = {};
     let usersList: any[] = [];
+
+    if (!loggedIn) {
+        return {
+            collections: PUBLIC_EVIDENCE_COLLECTIONS,
+            activeCollections: PUBLIC_EVIDENCE_COLLECTIONS,
+            submissions: [],
+            collectionStats: {},
+            loggedIn,
+            userRole,
+            username,
+            users: [],
+            usersList: [],
+            isSupabaseLive: isSupabaseConfigured,
+            publicMode: true,
+            participants,
+            participantsMeta: participantLoad.meta
+        };
+    }
 
     if (loggedIn && userRole === 'admin') {
         if (isSupabaseConfigured && supabase) {
@@ -176,7 +458,9 @@ export const load: PageServerLoad = async ({ cookies }) => {
         username,
         users: usersList,
         usersList,
-        isSupabaseLive: isSupabaseConfigured
+        isSupabaseLive: isSupabaseConfigured,
+        participants,
+        participantsMeta: participantLoad.meta
     };
 };
 
@@ -561,30 +845,249 @@ export const actions: Actions = {
         }
     },
 
+    importParticipantsXlsx: async ({ request, cookies }) => {
+        const currentUser = await getCurrentUser(cookies);
+        if (!canViewSubmissions(currentUser?.role || '')) {
+            return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนอัปเดตรายชื่อ' });
+        }
+
+        const formData = await request.formData();
+        const file = formData.get('participant_file') as File;
+        if (!file || file.size === 0) {
+            return fail(400, { success: false, message: 'กรุณาเลือกไฟล์ XLSX' });
+        }
+
+        try {
+            const rows = await parseParticipantsXlsx(file);
+            const savedRows = await replaceParticipants(rows);
+            return { success: true, message: `นำเข้ารายชื่อ ${savedRows.length} รายการเรียบร้อยแล้ว` };
+        } catch (err: any) {
+            console.error('[importParticipantsXlsx] error:', err);
+            return fail(500, { success: false, message: err.message || 'นำเข้าไฟล์ XLSX ไม่สำเร็จ' });
+        }
+    },
+
+    saveParticipants: async ({ request, cookies }) => {
+        const currentUser = await getCurrentUser(cookies);
+        if (!canViewSubmissions(currentUser?.role || '')) {
+            return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนอัปเดตรายชื่อ' });
+        }
+
+        const formData = await request.formData();
+        const participantText = (formData.get('participant_list') as string || '').trim();
+        const rows = parseParticipantList(participantText);
+        if (rows.length === 0) {
+            return fail(400, { success: false, message: 'กรุณากรอกรายชื่อก่อนบันทึก' });
+        }
+
+        try {
+            const savedRows = await replaceParticipants(rows);
+            return { success: true, message: `บันทึกรายชื่อ ${savedRows.length} รายการเรียบร้อยแล้ว` };
+        } catch (err: any) {
+            console.error('[saveParticipants] error:', err);
+            return fail(500, { success: false, message: err.message || 'บันทึกรายชื่อไม่สำเร็จ' });
+        }
+    },
+
+    addParticipant: async ({ request, cookies }) => {
+        const currentUser = await getCurrentUser(cookies);
+        if (!canViewSubmissions(currentUser?.role || '')) {
+            return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนเพิ่มรายชื่อ' });
+        }
+
+        const formData = await request.formData();
+        const fullName = (formData.get('full_name') as string || '').trim();
+        const order = Number.parseInt(formData.get('order') as string || '', 10);
+
+        try {
+            await addParticipant(fullName, Number.isFinite(order) ? order : undefined);
+            return { success: true, message: `เพิ่มรายชื่อ "${fullName}" เรียบร้อยแล้ว` };
+        } catch (err: any) {
+            console.error('[addParticipant] error:', err);
+            return fail(500, { success: false, message: err.message || 'เพิ่มรายชื่อไม่สำเร็จ' });
+        }
+    },
+
+    checkEvidenceStatus: async ({ request }) => {
+        const formData = await request.formData();
+        const name = (formData.get('name') as string || '').trim();
+        if (!name) {
+            return fail(400, { success: false, message: 'กรุณากรอกชื่อ-สกุล' });
+        }
+
+        try {
+            let submissions: any[] = [];
+            if (isSupabaseConfigured && supabase) {
+                const { data: subs, error } = await supabase
+                    .from('submissions')
+                    .select('*')
+                    .eq('is_deleted', false);
+                if (error) throw error;
+                submissions = (subs ?? []).map(s => ({
+                    ...s,
+                    img_data: s.img_url
+                }));
+            } else {
+                submissions = mockDb.submissions.filter(s => !s.is_deleted);
+            }
+
+            const status = findEvidenceForName(name, submissions);
+            return {
+                success: true,
+                name,
+                eve: status.eve,
+                cer: status.cer,
+                count: status.matches.length
+            };
+        } catch (err: any) {
+            return fail(500, { success: false, message: err.message || 'ไม่สามารถตรวจสถานะได้' });
+        }
+    },
+
+    updateSubmissionMapping: async ({ request, cookies }) => {
+        const currentUser = await getCurrentUser(cookies);
+        if (!canViewSubmissions(currentUser?.role || '')) {
+            return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนแก้ไขข้อมูล' });
+        }
+
+        const formData = await request.formData();
+        const id = (formData.get('id') as string || '').trim();
+        const name = (formData.get('name') as string || '').trim();
+        const evidenceType = normalizeEvidenceType(formData.get('evidence_type') as string);
+
+        if (!id || !name || !evidenceType) {
+            return fail(400, { success: false, message: 'ข้อมูล mapping ไม่ครบ' });
+        }
+
+        try {
+            const evidenceCollection = await resolveCollectionByEvidenceType(evidenceType);
+            if (!evidenceCollection) {
+                return fail(400, { success: false, message: `ยังไม่พบหัวข้อ ${evidenceType} ที่เปิดรับอยู่ในระบบ` });
+            }
+
+            if (isSupabaseConfigured && supabase) {
+                const { error } = await supabase
+                    .from('submissions')
+                    .update({
+                        name,
+                        collection_id: evidenceCollection.id,
+                        collection_name: evidenceCollection.name
+                    })
+                    .eq('id', id);
+                if (error) throw error;
+            } else {
+                const submission = mockDb.submissions.find(s => s.id === id);
+                if (!submission) {
+                    return fail(404, { success: false, message: 'ไม่พบไฟล์ที่ต้องการแก้ไข' });
+                }
+                submission.name = name;
+                submission.collection_id = evidenceCollection.id;
+                submission.collection_name = evidenceCollection.name;
+                submission.category = evidenceCollection.name;
+            }
+
+            return { success: true, message: 'อัปเดต mapping เรียบร้อยแล้ว' };
+        } catch (err: any) {
+            return fail(500, { success: false, message: err.message || 'อัปเดต mapping ไม่สำเร็จ' });
+        }
+    },
+
+    updateSubmissionMappings: async ({ request, cookies }) => {
+        const currentUser = await getCurrentUser(cookies);
+        if (!canViewSubmissions(currentUser?.role || '')) {
+            return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนแก้ไขข้อมูล' });
+        }
+
+        const formData = await request.formData();
+        const mappingsString = (formData.get('mappings') as string || '').trim();
+        if (!mappingsString) {
+            return fail(400, { success: false, message: 'ไม่มีรายการ mapping สำหรับบันทึก' });
+        }
+
+        try {
+            const mappings = JSON.parse(mappingsString) as Array<{ id: string; name: string; evidence_type: string }>;
+            if (!Array.isArray(mappings) || mappings.length === 0) {
+                return fail(400, { success: false, message: 'ไม่มีรายการ mapping สำหรับบันทึก' });
+            }
+
+            const evidenceCollections = new Map<string, Awaited<ReturnType<typeof resolveCollectionByEvidenceType>>>();
+            for (const type of ['eve', 'cer']) {
+                evidenceCollections.set(type, await resolveCollectionByEvidenceType(type));
+            }
+
+            for (const mapping of mappings) {
+                const id = (mapping.id || '').trim();
+                const name = (mapping.name || '').trim();
+                const evidenceType = normalizeEvidenceType(mapping.evidence_type);
+                const evidenceCollection = evidenceCollections.get(evidenceType);
+
+                if (!id || !name || !evidenceType || !evidenceCollection) {
+                    return fail(400, { success: false, message: 'มีรายการ mapping ที่ข้อมูลไม่ครบหรือหัวข้อไม่ถูกต้อง' });
+                }
+
+                if (isSupabaseConfigured && supabase) {
+                    const { error } = await supabase
+                        .from('submissions')
+                        .update({
+                            name,
+                            collection_id: evidenceCollection.id,
+                            collection_name: evidenceCollection.name
+                        })
+                        .eq('id', id);
+                    if (error) throw error;
+                } else {
+                    const submission = mockDb.submissions.find(s => s.id === id);
+                    if (!submission) {
+                        return fail(404, { success: false, message: `ไม่พบไฟล์ ${id}` });
+                    }
+                    submission.name = name;
+                    submission.collection_id = evidenceCollection.id;
+                    submission.collection_name = evidenceCollection.name;
+                    submission.category = evidenceCollection.name;
+                }
+            }
+
+            return { success: true, message: `อัปเดต mapping ${mappings.length} รายการเรียบร้อยแล้ว` };
+        } catch (err: any) {
+            return fail(500, { success: false, message: err.message || 'อัปเดต mapping ทั้งหมดไม่สำเร็จ' });
+        }
+    },
+
     // Public Student Submission
     submitForm: async ({ request }) => {
         const formData = await request.formData();
         const name = formData.get('name') as string;
-        const group_name = formData.get('group_name') as string;
         const collection_id = formData.get('collection_id') as string;
+        const evidence_type = formData.get('evidence_type') as string;
         const file = formData.get('file');
 
         const isFile = file && typeof file === 'object' && 'size' in file && 'name' in file;
         const fileSize = isFile ? (file as any).size : 0;
 
-        console.log('📤 [submitForm] Submission received:', { name, group_name, collection_id, isFile, fileSize });
+        console.log('📤 [submitForm] Submission received:', { name, collection_id, evidence_type, isFile, fileSize });
 
         if (!name || !isFile || fileSize === 0) {
             return fail(400, { success: false, message: 'กรุณากรอกข้อมูลและเลือกไฟล์รูปภาพให้ครบถ้วน' });
         }
 
         const subName = name.trim();
-        const subGroup = (group_name ?? '').trim();
+        const subGroup = '';
         let finalName = subName;
 
         let targetCollectionId = collection_id;
         let colName = '';
         let submissionLimit = 500;
+        const requestedEvidenceType = normalizeEvidenceType(evidence_type || collection_id);
+
+        if (requestedEvidenceType) {
+            const evidenceCollection = await resolveCollectionByEvidenceType(requestedEvidenceType);
+            if (!evidenceCollection) {
+                return fail(400, { success: false, message: `ยังไม่พบหัวข้อ ${requestedEvidenceType} ที่เปิดรับอยู่ในระบบ` });
+            }
+            targetCollectionId = evidenceCollection.id;
+            colName = evidenceCollection.name;
+            submissionLimit = evidenceCollection.submission_limit;
+        }
 
         if (isSupabaseConfigured && supabase) {
             // =============================================
@@ -804,13 +1307,43 @@ export const actions: Actions = {
 
             const collections = backupData.collections || [];
             const submissions = backupData.submissions || [];
+            const participants = backupData.participants || [];
 
-            if (!Array.isArray(collections) || !Array.isArray(submissions)) {
-                return fail(400, { success: false, message: 'โครงสร้าง collections หรือ submissions ในไฟล์ JSON ไม่ถูกต้อง' });
+            if (!Array.isArray(collections) || !Array.isArray(submissions) || !Array.isArray(participants)) {
+                return fail(400, { success: false, message: 'โครงสร้าง collections, submissions หรือ participants ในไฟล์ JSON ไม่ถูกต้อง' });
             }
 
             if (isSupabaseConfigured && supabase) {
-                // 1. นำเข้า Collections
+                // 1. นำเข้า Participants
+                if (participants.length > 0) {
+                    const { error: participantDeleteErr } = await supabase
+                        .from('participants')
+                        .delete()
+                        .not('id', 'is', null);
+                    if (participantDeleteErr) {
+                        console.error('[importBackupJson] Participants delete error:', participantDeleteErr);
+                        throw new Error(`ไม่สามารถล้างรายชื่อเดิมได้: ${participantDeleteErr.message}`);
+                    }
+
+                    const { error: participantErr } = await supabase
+                        .from('participants')
+                        .insert(
+                            participants.map((p, index) => ({
+                                id: p.id,
+                                list_order: p.list_order ?? p.order ?? index + 1,
+                                full_name: p.full_name ?? p.fullName ?? p.name,
+                                created_at: p.created_at || new Date().toISOString(),
+                                updated_at: p.updated_at || new Date().toISOString()
+                            })).filter(p => p.full_name)
+                        );
+
+                    if (participantErr) {
+                        console.error('[importBackupJson] Participants insert error:', participantErr);
+                        throw new Error(`ไม่สามารถกู้คืนรายชื่อหลักได้: ${participantErr.message}`);
+                    }
+                }
+
+                // 2. นำเข้า Collections
                 if (collections.length > 0) {
                     const { error: colErr } = await supabase
                         .from('collections')
@@ -830,7 +1363,7 @@ export const actions: Actions = {
                     }
                 }
 
-                // 2. นำเข้า Submissions
+                // 3. นำเข้า Submissions
                 if (submissions.length > 0) {
                     const { error: subErr } = await supabase
                         .from('submissions')
@@ -857,12 +1390,12 @@ export const actions: Actions = {
                 }
             } else {
                 // Fallback to mock DB
-                mockDb.importBackupData(collections, submissions);
+                mockDb.importBackupData(collections, submissions, participants);
             }
 
             return { 
                 success: true, 
-                message: `นำเข้าข้อมูลสำรองสำเร็จเรียบร้อย! (หัวข้อส่งงาน: ${collections.length} รายการ, รูปภาพส่งงาน: ${submissions.length} รูป)` 
+                message: `นำเข้าข้อมูลสำรองสำเร็จเรียบร้อย! (รายชื่อ: ${participants.length} รายการ, หัวข้อส่งงาน: ${collections.length} รายการ, รูปภาพส่งงาน: ${submissions.length} รูป)` 
             };
         } catch (err: any) {
             console.error('[importBackupJson] Restore error:', err);

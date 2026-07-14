@@ -95,6 +95,7 @@ export async function runBackup(r2BucketBinding?: any): Promise<BackupResult> {
         // 1. Gather Collections & Submissions
         let collections: any[] = [];
         let submissions: any[] = [];
+        let participants: any[] = [];
 
         if (isSupabaseConfigured && supabase) {
             const { data: cols, error: colsErr } = await supabase
@@ -108,10 +109,20 @@ export async function runBackup(r2BucketBinding?: any): Promise<BackupResult> {
                 .select('*');
             if (subsErr) throw subsErr;
             submissions = subs || [];
+
+            const { data: participantRows, error: participantsErr } = await supabase
+                .from('participants')
+                .select('*');
+            if (participantsErr) {
+                console.warn('Participants backup skipped:', participantsErr.message);
+            } else {
+                participants = participantRows || [];
+            }
         } else {
             // Fallback mock DB
             collections = mockDb.collections;
             submissions = mockDb.submissions;
+            participants = mockDb.participants;
         }
 
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -125,6 +136,7 @@ export async function runBackup(r2BucketBinding?: any): Promise<BackupResult> {
             exported_at: new Date().toISOString(),
             total_collections: collections.length,
             total_submissions: submissions.length,
+            total_participants: participants.length,
             collections: collections.map(c => ({
                 id: c.id,
                 name: c.name,
@@ -144,6 +156,13 @@ export async function runBackup(r2BucketBinding?: any): Promise<BackupResult> {
                 img_url: s.img_url || s.img_data,
                 is_deleted: s.is_deleted,
                 created_at: s.created_at
+            })),
+            participants: participants.map((p, index) => ({
+                id: p.id,
+                list_order: p.list_order ?? p.order ?? index + 1,
+                full_name: p.full_name ?? p.fullName ?? p.name,
+                created_at: p.created_at,
+                updated_at: p.updated_at
             }))
         };
 

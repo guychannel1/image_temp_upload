@@ -51,6 +51,32 @@ CREATE TABLE IF NOT EXISTS app_sessions (
 CREATE INDEX IF NOT EXISTS app_sessions_username_idx ON app_sessions(username);
 CREATE INDEX IF NOT EXISTS app_sessions_expires_at_idx ON app_sessions(expires_at);
 
+-- Master participant list used for evidence reports and ZIP rename order.
+CREATE TABLE IF NOT EXISTS participants (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    list_order INT NOT NULL UNIQUE,
+    full_name TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE participants ADD COLUMN IF NOT EXISTS list_order INT;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'participants'
+          AND column_name = 'order'
+    ) THEN
+        EXECUTE 'UPDATE participants SET list_order = "order" WHERE list_order IS NULL AND "order" IS NOT NULL';
+    END IF;
+END $$;
+ALTER TABLE participants ALTER COLUMN list_order SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS participants_full_name_idx ON participants(full_name);
+CREATE UNIQUE INDEX IF NOT EXISTS participants_list_order_key ON participants(list_order);
+
 -- Seed app_users with users (guyssar: guychannel1 -> admin, admin: 1234 -> staff)
 -- Password 'guychannel1' hash: d2175b1572d0be3ee4e5e04cf339b6f9946c47d6e4b7615d5bf70618d6cace61
 -- Password '1234' hash: 03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4

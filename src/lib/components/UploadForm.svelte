@@ -2,7 +2,7 @@
     import { appState } from '$lib/appState.svelte';
     import { enhance } from '$app/forms';
     import { browser } from '$app/environment';
-    import { Upload, X, Eye, Loader, CircleCheck, ShieldAlert, Send, User, Users, Camera, Image, Check } from '@lucide/svelte';
+    import { Upload, X, Eye, Loader, CircleCheck, ShieldAlert, Send, User, Camera, Image, Check } from '@lucide/svelte';
     import { gsap } from 'gsap';
 
     /**
@@ -57,8 +57,10 @@
 
     // Internal form states
     let studentName = $state('');
-    let studentGroup = $state('');
     let selectedCollectionId = $state('');
+    let checkName = $state('');
+    let statusResult = $state<{ eve: boolean; cer: boolean; count: number; name: string } | null>(null);
+    let isCheckingStatus = $state(false);
     let isDragging = $state(false);
     let previewUrl = $state<string | null>(null);
     let compressionStatus = $state<'idle' | 'compressing' | 'done' | 'error'>('idle');
@@ -83,6 +85,13 @@
      */
     function selectCollection(id: string) {
         selectedCollectionId = selectedCollectionId === id ? '' : id;
+    }
+
+    function evidenceTypeForCollection(id: string) {
+        const col = data.activeCollections.find((c: any) => c.id === id);
+        const value = `${id} ${col?.name ?? ''}`.toLowerCase();
+        if (value.includes('cer')) return 'cer';
+        return 'eve';
     }
 
     /**
@@ -163,8 +172,9 @@
      */
     function resetStudentForm() {
         studentName = '';
-        studentGroup = '';
         selectedCollectionId = '';
+        statusResult = null;
+        checkName = '';
         retryCount = 0;
         resetFile();
     }
@@ -204,6 +214,64 @@
             </div>
         </div>
     {:else}
+        <form method="POST" action="?/checkEvidenceStatus" use:enhance={() => {
+            isCheckingStatus = true;
+            return async ({ result, update }) => {
+                isCheckingStatus = false;
+                if (result.type === 'success') {
+                    const payload = result.data as any;
+                    statusResult = {
+                        eve: !!payload.eve,
+                        cer: !!payload.cer,
+                        count: payload.count ?? 0,
+                        name: payload.name ?? checkName
+                    };
+                    studentName = payload.name ?? checkName;
+                } else {
+                    statusResult = null;
+                    // @ts-ignore
+                    appState.showToast('ตรวจสถานะไม่สำเร็จ', result.data?.message || 'กรุณาลองใหม่อีกครั้ง', 'error');
+                }
+                await update({ reset: false });
+            };
+        }} class="glass rounded-3xl p-5 sm:p-6 shadow-xl border border-zinc-800/80 space-y-4">
+            <div class="flex flex-col sm:flex-row gap-3 sm:items-end">
+                <div class="flex-1 space-y-2">
+                    <label for="check_name" class="block text-sm font-semibold text-zinc-300">ตรวจสอบสถานะจากชื่อ-สกุล</label>
+                    <input
+                        id="check_name"
+                        name="name"
+                        bind:value={checkName}
+                        placeholder="เช่น สมศักดิ์ วันจันทร์"
+                        class="w-full bg-zinc-950/40 border border-zinc-800 rounded-2xl px-4 py-3 text-base text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all"
+                    >
+                    <p class="text-xs text-zinc-500">ใช้ชื่อภาษาไทยเท่านั้น ไม่ต้องใส่คำนำหน้า และไม่ใช้อักขระพิเศษ เช่น . , / \ |</p>
+                </div>
+                <button type="submit" disabled={isCheckingStatus || !checkName.trim()} class="bg-zinc-100 text-zinc-950 dark:bg-zinc-100 dark:text-zinc-950 disabled:opacity-50 disabled:cursor-not-allowed font-bold px-5 py-3 rounded-2xl transition-all flex items-center justify-center gap-2">
+                    {#if isCheckingStatus}
+                        <Loader class="w-4 h-4 animate-spin" />
+                        <span>กำลังตรวจ</span>
+                    {:else}
+                        <Check class="w-4 h-4" />
+                        <span>ตรวจสถานะ</span>
+                    {/if}
+                </button>
+            </div>
+
+            {#if statusResult}
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="rounded-2xl border p-4 {statusResult.eve ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-amber-500/30 bg-amber-500/10'}">
+                        <div class="text-xs text-zinc-400 font-semibold uppercase">eve</div>
+                        <div class="text-lg font-black {statusResult.eve ? 'text-emerald-400' : 'text-amber-300'}">{statusResult.eve ? 'ส่งแล้ว' : 'ยังไม่ได้ส่ง'}</div>
+                    </div>
+                    <div class="rounded-2xl border p-4 {statusResult.cer ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-amber-500/30 bg-amber-500/10'}">
+                        <div class="text-xs text-zinc-400 font-semibold uppercase">cer</div>
+                        <div class="text-lg font-black {statusResult.cer ? 'text-emerald-400' : 'text-amber-300'}">{statusResult.cer ? 'ส่งแล้ว' : 'ยังไม่ได้ส่ง'}</div>
+                    </div>
+                </div>
+            {/if}
+        </form>
+
         <form method="POST" action="?/submitForm" enctype="multipart/form-data" use:enhance={({ formData }) => {
             if (isSubmitting) return;
             isSubmitting = true;
@@ -211,6 +279,9 @@
             if (compressedFileBlob && currentUploadedFile) {
                 formData.set('file', compressedFileBlob, currentUploadedFile.name);
                 formData.set('original_size', originalSize.toString());
+            }
+            if (selectedCollectionId) {
+                formData.set('evidence_type', evidenceTypeForCollection(selectedCollectionId));
             }
             return async ({ update, result }) => {
                 if (result.type === 'success') {
@@ -254,7 +325,7 @@
                             <!-- <p class="text-xs text-zinc-400">กรุณาแจ้งชื่อและกลุ่มเพื่อการเช็คงานที่ถูกต้อง</p> -->
                         </div>
                         
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div class="grid grid-cols-1 gap-4">
                             <!-- Name input -->
                             <div class="space-y-2">
                                 <label for="name" class="block text-sm font-semibold text-zinc-300">ชื่อ - นามสกุล <span class="text-rose-500">*</span></label>
@@ -268,28 +339,11 @@
                                         name="name" 
                                         bind:value={studentName} 
                                         required 
-                                        placeholder="พิมพ์ชื่อและนามสกุลที่นี่..."
+                                        placeholder="เช่น สมศักดิ์ วันจันทร์"
                                         class="w-full bg-zinc-950/40 border border-zinc-800 rounded-2xl pl-12 pr-4 py-3.5 text-base text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all"
                                     >
                                 </div>
-                            </div>
-
-                            <!-- Group input -->
-                            <div class="space-y-2">
-                                <label for="group_name" class="block text-sm font-semibold text-zinc-300">กลุ่ม <span class="text-zinc-500 text-xs font-normal">(ไม่ระบุก็ได้)</span></label>
-                                <div class="relative flex items-center focus-within:text-emerald-400 text-zinc-500">
-                                    <span class="absolute left-4 pointer-events-none">
-                                        <Users class="w-5 h-5 transition-colors" />
-                                    </span>
-                                    <input 
-                                        type="text" 
-                                        id="group_name" 
-                                        name="group_name" 
-                                        bind:value={studentGroup} 
-                                        placeholder="เช่น กลุ่ม 1, ทีม A"
-                                        class="w-full bg-zinc-950/40 border border-zinc-800 rounded-2xl pl-12 pr-4 py-3.5 text-base text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all"
-                                    >
-                                </div>
+                                <p class="text-xs text-zinc-500">ใช้ชื่อภาษาไทยเท่านั้น ไม่ต้องใส่คำนำหน้า และไม่ใช้อักขระพิเศษ เช่น . , / \ |</p>
                             </div>
                         </div>
                     </div>
@@ -311,6 +365,7 @@
                         
                         <!-- Hidden input to submit the collection ID -->
                         <input type="hidden" name="collection_id" value={selectedCollectionId}>
+                        <input type="hidden" name="evidence_type" value={selectedCollectionId ? evidenceTypeForCollection(selectedCollectionId) : ''}>
 
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
                             {#each data.activeCollections as col}
@@ -537,4 +592,3 @@
         </div>
     </div>
 {/if}
-
