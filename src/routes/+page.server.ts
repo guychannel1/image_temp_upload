@@ -21,6 +21,10 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
     return chunks;
 }
 
+function canViewSubmissions(role: string): role is 'admin' | 'staff' {
+    return role === 'admin' || role === 'staff';
+}
+
 export const load: PageServerLoad = async ({ cookies }) => {
     const currentUser = await getCurrentUser(cookies);
     const loggedIn = !!currentUser;
@@ -101,8 +105,10 @@ export const load: PageServerLoad = async ({ cookies }) => {
                     is_deleted: s.is_deleted
                 }));
 
-                if (userRole === 'admin') {
-                    submissionsList = allMapped;
+                if (canViewSubmissions(userRole)) {
+                    submissionsList = userRole === 'admin'
+                        ? allMapped
+                        : allMapped.filter(s => !s.is_deleted);
                 }
             }
         } catch (err) {
@@ -118,7 +124,9 @@ export const load: PageServerLoad = async ({ cookies }) => {
                 }
                 return stats;
             }, {} as Record<string, { count: number; totalFileSize: number }>);
-            submissionsList = userRole === 'admin' ? mockDb.submissions : [];
+            submissionsList = canViewSubmissions(userRole)
+                ? (userRole === 'admin' ? mockDb.submissions : mockDb.submissions.filter(s => !s.is_deleted))
+                : [];
         }
     } else {
         // Fallback to local mock db
@@ -141,8 +149,10 @@ export const load: PageServerLoad = async ({ cookies }) => {
             return stats;
         }, {} as Record<string, { count: number; totalFileSize: number }>);
 
-        if (userRole === 'admin') {
-            submissionsList = allMapped;
+        if (canViewSubmissions(userRole)) {
+            submissionsList = userRole === 'admin'
+                ? allMapped
+                : allMapped.filter(s => !s.is_deleted);
         }
     }
 

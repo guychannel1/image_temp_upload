@@ -7,8 +7,8 @@ const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
 
 export const GET: RequestHandler = async ({ url, fetch, cookies }) => {
 	const currentUser = await getCurrentUser(cookies);
-	if (currentUser?.role !== 'admin') {
-		error(403, 'Admin access required');
+	if (currentUser?.role !== 'admin' && currentUser?.role !== 'staff') {
+		error(403, 'Admin or staff access required');
 	}
 
 	const storagePath = url.searchParams.get('path');
