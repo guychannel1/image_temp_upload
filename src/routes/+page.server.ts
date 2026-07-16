@@ -68,6 +68,35 @@ function participantRecordsToParticipants(records: any[]) {
         .map((row, index) => ({ order: Number.isFinite(row.order) && row.order > 0 ? row.order : index + 1, fullName: row.fullName }));
 }
 
+function isMissingParticipantListOrderError(error: any) {
+    const message = String(error?.message ?? error ?? '');
+    return /list_order/i.test(message) && /schema cache|column|could not find/i.test(message);
+}
+
+async function getParticipantOrderColumn(): Promise<'list_order' | 'order'> {
+    if (!supabase) return 'list_order';
+
+    const { error } = await supabase
+        .from('participants')
+        .select('id, list_order, full_name, created_at')
+        .limit(1);
+
+    if (!error) return 'list_order';
+    if (isMissingParticipantListOrderError(error)) return 'order';
+    throw error;
+}
+
+function participantSelectColumns(orderColumn: 'list_order' | 'order') {
+    return `id, ${orderColumn}, full_name, created_at`;
+}
+
+function participantInsertRows(rows: Array<{ order: number; fullName: string }>, orderColumn: 'list_order' | 'order') {
+    return rows.map((row) => ({
+        [orderColumn]: row.order,
+        full_name: row.fullName
+    }));
+}
+
 async function loadParticipants(loggedIn: boolean) {
     const fileParticipants = await loadParticipantsFromListFile();
     if (!loggedIn) {
@@ -79,17 +108,12 @@ async function loadParticipants(loggedIn: boolean) {
 
     if (isSupabaseConfigured && supabase) {
         try {
-            let response = await supabase
+            const orderColumn = await getParticipantOrderColumn();
+            const response = await supabase
                 .from('participants')
-                .select('id, list_order, full_name, created_at')
-                .order('list_order', { ascending: true })
+                .select(participantSelectColumns(orderColumn))
+                .order(orderColumn, { ascending: true })
                 .range(0, 5000);
-            if (response.error) {
-                response = await supabase
-                    .from('participants')
-                    .select('*')
-                    .range(0, 5000);
-            }
 
             const { data, error } = response;
             if (error) throw error;
@@ -224,6 +248,8 @@ async function replaceParticipants(rows: Array<{ order: number; fullName: string
     }
 
     if (isSupabaseConfigured && supabase) {
+        const orderColumn = await getParticipantOrderColumn();
+
         const { error: deleteError } = await supabase
             .from('participants')
             .delete()
@@ -232,10 +258,7 @@ async function replaceParticipants(rows: Array<{ order: number; fullName: string
 
         const { error: insertError } = await supabase
             .from('participants')
-            .insert(normalizedRows.map((row) => ({
-                list_order: row.order,
-                full_name: row.fullName
-            })));
+            .insert(participantInsertRows(normalizedRows, orderColumn));
         if (insertError) throw insertError;
     } else {
         mockDb.replaceParticipants(normalizedRows);
@@ -249,10 +272,11 @@ async function addParticipant(fullName: string, order?: number) {
     if (!cleanName) throw new Error('กรุณากรอกชื่อ-สกุล');
 
     if (isSupabaseConfigured && supabase) {
+        const orderColumn = await getParticipantOrderColumn();
         const { data, error } = await supabase
             .from('participants')
-            .select('id, list_order, full_name, created_at')
-            .order('list_order', { ascending: true });
+            .select(participantSelectColumns(orderColumn))
+            .order(orderColumn, { ascending: true });
         if (error) throw error;
 
         const rows = participantRecordsToParticipants(data ?? []);
@@ -1316,6 +1340,7 @@ export const actions: Actions = {
             if (isSupabaseConfigured && supabase) {
                 // 1. นำเข้า Participants
                 if (participants.length > 0) {
+                    const orderColumn = await getParticipantOrderColumn();
                     const { error: participantDeleteErr } = await supabase
                         .from('participants')
                         .delete()
@@ -1330,7 +1355,7 @@ export const actions: Actions = {
                         .insert(
                             participants.map((p, index) => ({
                                 id: p.id,
-                                list_order: p.list_order ?? p.order ?? index + 1,
+                                [orderColumn]: p.list_order ?? p.order ?? index + 1,
                                 full_name: p.full_name ?? p.fullName ?? p.name,
                                 created_at: p.created_at || new Date().toISOString(),
                                 updated_at: p.updated_at || new Date().toISOString()
