@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { page } from '$app/state';
     import { appState } from '$lib/appState.svelte';
     import { Upload, Send, LayoutDashboard, Sun, Moon, X, Menu } from '@lucide/svelte';
 
@@ -15,6 +16,7 @@
     }
 
     let { data }: Props = $props();
+    const isDashboardRoute = $derived(page.url.pathname.startsWith('/dashboard'));
 </script>
 
 <!-- Redesigned responsive navigation bar -->
@@ -22,7 +24,7 @@
     <div class="header-inner max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
 
         <!-- Logo / Brand element with micro-interaction hover scaling -->
-        <a href="/" class="logo-area flex items-center gap-2.5 shrink-0" onclick={(e) => { e.preventDefault(); appState.activeTab = 'portal'; }}>
+        <a href="/" class="logo-area flex items-center gap-2.5 shrink-0" onclick={() => { appState.activeTab = 'portal'; }}>
             <div class="flex flex-col leading-none">
                 <span class="logo-title text-xl font-bold tracking-tight">Temporarily</span>
                 {#if !data.isSupabaseLive}
@@ -33,22 +35,24 @@
 
         <!-- Desktop Navigation Tabs -->
         <nav class="hidden sm:flex items-center gap-1 nav-tabs-wrapper px-1.5 py-1.5 rounded-2xl" aria-label="เมนูหลัก">
-            <button
+            <a
+                href="/"
                 onclick={() => appState.activeTab = 'portal'}
-                class="nav-tab {appState.activeTab === 'portal' ? 'nav-tab--active' : ''}"
-                aria-current={appState.activeTab === 'portal' ? 'page' : undefined}
+                class="nav-tab {!isDashboardRoute ? 'nav-tab--active' : ''}"
+                aria-current={!isDashboardRoute ? 'page' : undefined}
             >
                 <Send class="w-3.5 h-3.5" />
                 <span>ส่งรูปภาพ</span>
-            </button>
-            <button
+            </a>
+            <a
+                href="/dashboard"
                 onclick={() => appState.activeTab = data.loggedIn ? 'admin' : 'login'}
-                class="nav-tab {appState.activeTab === 'admin' || appState.activeTab === 'login' ? 'nav-tab--active' : ''}"
-                aria-current={appState.activeTab === 'admin' || appState.activeTab === 'login' ? 'page' : undefined}
+                class="nav-tab {isDashboardRoute ? 'nav-tab--active' : ''}"
+                aria-current={isDashboardRoute ? 'page' : undefined}
             >
                 <LayoutDashboard class="w-3.5 h-3.5" />
-                <span>จัดการหลังบ้าน</span>
-            </button>
+                <span>Dashboard</span>
+            </a>
         </nav>
 
         <!-- Right side controls (Theme switch, Hamburger menu) -->
@@ -90,21 +94,23 @@
     <!-- Mobile Navigation Drawer Panel -->
     {#if appState.isMobileMenuOpen}
         <div class="sm:hidden mobile-drawer mx-4 mb-3 rounded-2xl overflow-hidden shadow-lg border border-zinc-800/80">
-            <button
+            <a
+                href="/"
                 onclick={() => { appState.activeTab = 'portal'; appState.isMobileMenuOpen = false; }}
-                class="mobile-nav-item w-full {appState.activeTab === 'portal' ? 'mobile-nav-item--active' : ''}"
+                class="mobile-nav-item w-full {!isDashboardRoute ? 'mobile-nav-item--active' : ''}"
             >
                 <Send class="w-4 h-4" />
                 <span>ส่งรูปภาพ</span>
-            </button>
+            </a>
             <div class="mobile-nav-divider"></div>
-            <button
+            <a
+                href="/dashboard"
                 onclick={() => { appState.activeTab = data.loggedIn ? 'admin' : 'login'; appState.isMobileMenuOpen = false; }}
-                class="mobile-nav-item w-full {appState.activeTab === 'admin' || appState.activeTab === 'login' ? 'mobile-nav-item--active' : ''}"
+                class="mobile-nav-item w-full {isDashboardRoute ? 'mobile-nav-item--active' : ''}"
             >
                 <LayoutDashboard class="w-4 h-4" />
-                <span>จัดการหลังบ้าน</span>
-            </button>
+                <span>Dashboard</span>
+            </a>
         </div>
     {/if}
 </header>

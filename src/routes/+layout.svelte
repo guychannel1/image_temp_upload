@@ -17,6 +17,6 @@
     <title>Temp</title>
 </svelte:head>
 
-<main class="flex-1 w-full z-10 flex flex-col relative">
+<main class="flex-1 w-full z-10 flex flex-col relative  ">
     {@render children()}
 </main>

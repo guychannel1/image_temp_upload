@@ -6,7 +6,7 @@ import { fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
-import { findEvidenceForName, parseParticipantList } from '$lib/evidence';
+import { findEvidenceForName, normalizePersonName, parseParticipantList } from '$lib/evidence';
 
 /**
  * Computes SHA-256 hash of a string.
@@ -31,6 +31,29 @@ const PUBLIC_EVIDENCE_COLLECTIONS = [
     { id: 'eve', name: 'eve', is_active: true, submission_limit: 500 },
     { id: 'cer', name: 'cer', is_active: true, submission_limit: 500 }
 ];
+
+type AttendancePeriod = 'morning' | 'afternoon';
+type AttendancePayloadRow = {
+    participant_name: string;
+    attendance_date: string;
+    period: AttendancePeriod;
+    is_present: boolean;
+    previous_is_present?: boolean;
+};
+type AttendanceDateRename = {
+    from: string;
+    to: string;
+};
+type AttendanceSessionRow = {
+    id: string;
+    session_date: string;
+    period: AttendancePeriod;
+    label: string;
+};
+
+const ATTENDANCE_DELETE_NAME_CHUNK_SIZE = 8;
+const ATTENDANCE_DELETE_ID_CHUNK_SIZE = 80;
+const ATTENDANCE_INSERT_CHUNK_SIZE = 300;
 
 function evidenceAliases(type: string) {
     if (type === 'eve') return ['eve', 'ewe', 'evidence'];
@@ -73,6 +96,11 @@ function isMissingParticipantListOrderError(error: any) {
     return /list_order/i.test(message) && /schema cache|column|could not find/i.test(message);
 }
 
+function isMissingParticipantOrderError(error: any) {
+    const message = String(error?.message ?? error ?? '');
+    return /\border\b/i.test(message) && /schema cache|column|could not find/i.test(message);
+}
+
 async function getParticipantOrderColumn(): Promise<'list_order' | 'order'> {
     if (!supabase) return 'list_order';
 
@@ -86,6 +114,19 @@ async function getParticipantOrderColumn(): Promise<'list_order' | 'order'> {
     throw error;
 }
 
+async function hasLegacyParticipantOrderColumn() {
+    if (!supabase) return false;
+
+    const { error } = await supabase
+        .from('participants')
+        .select('id, order')
+        .limit(1);
+
+    if (!error) return true;
+    if (isMissingParticipantOrderError(error)) return false;
+    return false;
+}
+
 function participantSelectColumns(orderColumn: 'list_order' | 'order') {
     return `id, ${orderColumn}, full_name, created_at`;
 }
@@ -95,6 +136,22 @@ function participantInsertRows(rows: Array<{ order: number; fullName: string }>,
         [orderColumn]: row.order,
         full_name: row.fullName
     }));
+}
+
+function participantInsertRowsForSchema(
+    rows: Array<{ order: number; fullName: string }>,
+    orderColumn: 'list_order' | 'order',
+    includeLegacyOrder: boolean
+) {
+    return rows.map((row) => ({
+        [orderColumn]: row.order,
+        ...(includeLegacyOrder ? { order: row.order } : {}),
+        full_name: row.fullName
+    }));
+}
+
+function participantNameKey(name: string) {
+    return normalizePersonName(name);
 }
 
 async function loadParticipants(loggedIn: boolean) {
@@ -249,17 +306,108 @@ async function replaceParticipants(rows: Array<{ order: number; fullName: string
 
     if (isSupabaseConfigured && supabase) {
         const orderColumn = await getParticipantOrderColumn();
-
-        const { error: deleteError } = await supabase
+        const includeLegacyOrder = await hasLegacyParticipantOrderColumn();
+        const { data: existingData, error: existingError } = await supabase
             .from('participants')
-            .delete()
-            .not('id', 'is', null);
-        if (deleteError) throw deleteError;
+            .select(`id, ${orderColumn}, full_name`);
+        if (existingError) throw existingError;
 
-        const { error: insertError } = await supabase
-            .from('participants')
-            .insert(participantInsertRows(normalizedRows, orderColumn));
-        if (insertError) throw insertError;
+        const existingRows = (existingData ?? []).map((row: any, index: number) => ({
+            id: row.id,
+            order: Number(row[orderColumn] ?? index + 1),
+            fullName: String(row.full_name ?? '').trim().replace(/\s+/g, ' ')
+        }));
+        const existingByName = new Map(existingRows.map((row) => [participantNameKey(row.fullName), row]));
+        const existingByOrder = new Map(existingRows.map((row) => [row.order, row]));
+        const usedExistingIds = new Set<string>();
+        const matchedRows = normalizedRows.map((row) => {
+            const byName = existingByName.get(participantNameKey(row.fullName));
+            const byOrder = existingByOrder.get(row.order);
+            const existing = byName && !usedExistingIds.has(byName.id)
+                ? byName
+                : byOrder && !usedExistingIds.has(byOrder.id)
+                    ? byOrder
+                    : null;
+            if (existing) usedExistingIds.add(existing.id);
+            return { ...row, existing };
+        });
+
+        for (const [index, existing] of existingRows.entries()) {
+            const tempOrder = -(index + 1);
+            const { error } = await supabase
+                .from('participants')
+                .update({
+                    [orderColumn]: tempOrder,
+                    ...(includeLegacyOrder ? { order: tempOrder } : {}),
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', existing.id);
+            if (error) throw error;
+        }
+
+        for (const row of matchedRows) {
+            const now = new Date().toISOString();
+            if (!row.existing) {
+                const { error } = await supabase
+                    .from('participants')
+                    .insert({
+                        [orderColumn]: row.order,
+                        ...(includeLegacyOrder ? { order: row.order } : {}),
+                        full_name: row.fullName,
+                        created_at: now,
+                        updated_at: now
+                    });
+                if (error) throw error;
+                continue;
+            }
+
+            if (row.existing.fullName !== row.fullName) {
+                const { error: attendanceByIdError } = await supabase
+                    .from('attendance_records')
+                    .update({ participant_name: row.fullName, updated_at: now })
+                    .eq('participant_id', row.existing.id);
+                if (attendanceByIdError && !isAttendanceSchemaError(attendanceByIdError)) throw attendanceByIdError;
+
+                const { error: attendanceByNameError } = await supabase
+                    .from('attendance_records')
+                    .update({ participant_name: row.fullName, updated_at: now })
+                    .eq('participant_name', row.existing.fullName);
+                if (attendanceByNameError && !isAttendanceSchemaError(attendanceByNameError)) throw attendanceByNameError;
+            }
+
+            const { error } = await supabase
+                .from('participants')
+                .update({
+                    [orderColumn]: row.order,
+                    ...(includeLegacyOrder ? { order: row.order } : {}),
+                    full_name: row.fullName,
+                    updated_at: now
+                })
+                .eq('id', row.existing.id);
+            if (error) throw error;
+        }
+
+        const removedIds = existingRows
+            .filter((row) => !usedExistingIds.has(row.id))
+            .map((row) => row.id);
+        if (removedIds.length > 0) {
+            const hasParticipantId = await hasAttendanceParticipantIdColumn();
+            if (hasParticipantId) {
+                for (const idChunk of chunkArray(removedIds, ATTENDANCE_DELETE_ID_CHUNK_SIZE)) {
+                    const { error } = await supabase
+                        .from('attendance_records')
+                        .update({ participant_id: null, updated_at: new Date().toISOString() })
+                        .in('participant_id', idChunk);
+                    if (error && !isAttendanceSchemaError(error)) throw error;
+                }
+            }
+
+            const { error: deleteError } = await supabase
+                .from('participants')
+                .delete()
+                .in('id', removedIds);
+            if (deleteError) throw deleteError;
+        }
     } else {
         mockDb.replaceParticipants(normalizedRows);
     }
@@ -290,6 +438,492 @@ async function addParticipant(fullName: string, order?: number) {
     }
 }
 
+function attendanceRecordsToRows(records: any[]) {
+    return records
+        .map((row) => ({
+            id: String(row.id ?? ''),
+            participant_name: String(row.participant_name ?? '').trim().replace(/\s+/g, ' '),
+            attendance_date: String(row.attendance_date ?? '').slice(0, 10),
+            period: row.period === 'afternoon' ? 'afternoon' : 'morning',
+            is_present: !!row.is_present
+        }))
+        .filter((row) => row.participant_name && row.attendance_date);
+}
+
+function attendanceSessionsToRows(records: any[]): AttendanceSessionRow[] {
+    return records
+        .map((row) => ({
+            id: String(row.id ?? ''),
+            session_date: String(row.session_date ?? '').slice(0, 10),
+            period: (row.period === 'afternoon' ? 'afternoon' : 'morning') as AttendancePeriod,
+            label: String(row.label ?? '')
+        }))
+        .filter((row) => row.session_date);
+}
+
+function isAttendanceSchemaError(error: any) {
+    const message = String(error?.message ?? error ?? '');
+    const code = String(error?.code ?? '');
+    return code === '42703'
+        || code === '42P10'
+        || (/attendance_records/i.test(message) && /column|schema cache|constraint|on conflict/i.test(message));
+}
+
+function attendanceMigrationMessage(error?: any) {
+    const detail = error?.message ? ` (${error.message})` : '';
+    return `โครงสร้างตาราง attendance_records ยังไม่ตรงกับระบบ กรุณารัน migration_attendance_records.sql ใน Supabase SQL Editor${detail}`;
+}
+
+function formatServerError(error: any) {
+    if (!error) return 'Unknown error';
+    if (typeof error === 'string') return error;
+    return [
+        error.message,
+        error.code ? `code=${error.code}` : '',
+        error.details ? `details=${error.details}` : '',
+        error.hint ? `hint=${error.hint}` : ''
+    ].filter(Boolean).join(' | ') || JSON.stringify(error);
+}
+
+async function hasAttendanceParticipantIdColumn() {
+    if (!supabase) return false;
+
+    const { error } = await supabase
+        .from('attendance_records')
+        .select('id, participant_id')
+        .limit(1);
+
+    if (!error) return true;
+    const message = String(error?.message ?? '');
+    if (/participant_id/i.test(message) && /schema cache|column|could not find/i.test(message)) return false;
+    return false;
+}
+
+async function hasAttendanceSessionIsDeletedColumn() {
+    if (!supabase) return false;
+
+    const { error } = await supabase
+        .from('attendance_sessions')
+        .select('id, is_deleted')
+        .limit(1);
+
+    if (!error) return true;
+    const message = String(error?.message ?? '');
+    if (/is_deleted/i.test(message) && /schema cache|column|could not find/i.test(message)) return false;
+    return false;
+}
+
+async function loadParticipantIdByName(participantNames: string[]) {
+    const result = new Map<string, string>();
+    if (!supabase || participantNames.length === 0) return result;
+
+    const requestedNames = new Set(participantNames.map((name) => name.trim().replace(/\s+/g, ' ')).filter(Boolean));
+    let from = 0;
+    const pageSize = 1000;
+
+    while (true) {
+        const { data, error } = await supabase
+            .from('participants')
+            .select('id, full_name')
+            .range(from, from + pageSize - 1);
+        if (error) throw error;
+
+        for (const row of data ?? []) {
+            const name = String(row.full_name).trim().replace(/\s+/g, ' ');
+            if (requestedNames.has(name)) {
+                result.set(name, row.id);
+            }
+        }
+
+        if (!data || data.length < pageSize || result.size >= requestedNames.size) break;
+        from += pageSize;
+    }
+
+    return result;
+}
+
+async function ensureParticipantIdsByName(participantNames: string[]) {
+    const existing = await loadParticipantIdByName(participantNames);
+    if (!supabase) return existing;
+
+    const requestedNames = Array.from(new Set(participantNames.map((name) => name.trim().replace(/\s+/g, ' ')).filter(Boolean)));
+    const missingNames = requestedNames.filter((name) => !existing.has(name));
+    if (missingNames.length === 0) return existing;
+
+    const orderColumn = await getParticipantOrderColumn();
+    const includeLegacyOrder = await hasLegacyParticipantOrderColumn();
+    const { data: currentRows, error: currentRowsError } = await supabase
+        .from('participants')
+        .select(participantSelectColumns(orderColumn))
+        .range(0, 10000);
+    if (currentRowsError) throw currentRowsError;
+
+    const currentOrders = participantRecordsToParticipants(currentRows ?? []).map((row) => row.order);
+    const maxOrder = currentOrders.length > 0 ? Math.max(...currentOrders) : 0;
+    const now = new Date().toISOString();
+    const rowsToInsert = missingNames.map((name, index) => {
+        const rowOrder = maxOrder + index + 1;
+        return {
+            [orderColumn]: rowOrder,
+            ...(includeLegacyOrder ? { order: rowOrder } : {}),
+            full_name: name,
+            created_at: now,
+            updated_at: now
+        };
+    });
+
+    for (const chunk of chunkArray(rowsToInsert, 500)) {
+        const { error } = await supabase
+            .from('participants')
+            .insert(chunk);
+        if (error) throw error;
+    }
+
+    return loadParticipantIdByName(requestedNames);
+}
+
+async function loadAttendanceRecords(loggedIn: boolean) {
+    if (!loggedIn) return [];
+
+    if (isSupabaseConfigured && supabase) {
+        try {
+            const { data, error } = await supabase
+                .from('attendance_records')
+                .select('id, participant_name, attendance_date, period, is_present')
+                .or('is_deleted.is.null,is_deleted.eq.false')
+                .order('attendance_date', { ascending: true })
+                .range(0, 20000);
+            if (error) throw error;
+            return attendanceRecordsToRows(data ?? []);
+        } catch (err: any) {
+            console.error('Failed to load attendance records:', isAttendanceSchemaError(err) ? attendanceMigrationMessage(err) : err);
+            return [];
+        }
+    }
+
+    return attendanceRecordsToRows(mockDb.attendanceRecords.filter((record) => !record.is_deleted));
+}
+
+async function loadAttendanceSessions(loggedIn: boolean) {
+    if (!loggedIn) return [];
+
+    if (isSupabaseConfigured && supabase) {
+        try {
+            const hasIsDeleted = await hasAttendanceSessionIsDeletedColumn();
+            let query = supabase
+                .from('attendance_sessions')
+                .select(hasIsDeleted ? 'id, session_date, period, label, is_deleted' : 'id, session_date, period, label')
+                .order('session_date', { ascending: true })
+                .order('period', { ascending: true })
+                .range(0, 20000);
+
+            if (hasIsDeleted) {
+                query = query.or('is_deleted.is.null,is_deleted.eq.false');
+            }
+
+            const { data, error } = await query;
+            if (error) throw error;
+            return attendanceSessionsToRows(data ?? []);
+        } catch (err: any) {
+            console.error('Failed to load attendance sessions:', err);
+            return [];
+        }
+    }
+
+    return attendanceSessionsToRows(mockDb.attendanceSessions.filter((session) => !session.is_deleted));
+}
+
+function normalizeAttendancePayload(value: string): AttendancePayloadRow[] {
+    const parsed = JSON.parse(value || '[]');
+    if (!Array.isArray(parsed)) {
+        throw new Error('Attendance payload must be an array');
+    }
+
+    return parsed
+        .map((row) => ({
+            participant_name: String(row.participant_name ?? '').trim().replace(/\s+/g, ' '),
+            attendance_date: String(row.attendance_date ?? '').slice(0, 10),
+            period: (row.period === 'afternoon' ? 'afternoon' : 'morning') as AttendancePeriod,
+            is_present: !!row.is_present,
+            previous_is_present: typeof row.previous_is_present === 'boolean' ? row.previous_is_present : undefined
+        }))
+        .filter((row) => row.participant_name && /^\d{4}-\d{2}-\d{2}$/.test(row.attendance_date));
+}
+
+function normalizeAttendanceDateRenames(value: string): AttendanceDateRename[] {
+    const parsed = JSON.parse(value || '[]');
+    if (!Array.isArray(parsed)) {
+        throw new Error('Attendance date renames must be an array');
+    }
+
+    return parsed
+        .map((row) => ({
+            from: String(row.from ?? '').slice(0, 10),
+            to: String(row.to ?? '').slice(0, 10)
+        }))
+        .filter((row) =>
+            /^\d{4}-\d{2}-\d{2}$/.test(row.from)
+            && /^\d{4}-\d{2}-\d{2}$/.test(row.to)
+            && row.from !== row.to
+        );
+}
+
+function normalizeAttendanceDeletedDates(value: string): string[] {
+    const parsed = JSON.parse(value || '[]');
+    if (!Array.isArray(parsed)) {
+        throw new Error('Attendance deleted dates must be an array');
+    }
+
+    return Array.from(new Set(parsed
+        .map((date) => String(date ?? '').slice(0, 10))
+        .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))));
+}
+
+async function deleteAttendanceDates(participantNames: string[], dates: string[]) {
+    const cleanNames = Array.from(new Set(participantNames.map((name) => name.trim().replace(/\s+/g, ' ')).filter(Boolean)));
+    const cleanDates = Array.from(new Set(dates.filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))));
+    if (cleanNames.length === 0 || cleanDates.length === 0) return 0;
+
+    if (isSupabaseConfigured && supabase) {
+        const hasParticipantId = await hasAttendanceParticipantIdColumn();
+        const participantIdByName = hasParticipantId ? await loadParticipantIdByName(cleanNames) : new Map<string, string>();
+        for (const date of cleanDates) {
+            if (hasParticipantId) {
+                const ids = cleanNames.map((name) => participantIdByName.get(name)).filter(Boolean);
+                for (const idChunk of chunkArray(ids, ATTENDANCE_DELETE_ID_CHUNK_SIZE)) {
+                    if (idChunk.length === 0) continue;
+                    const { error } = await supabase
+                        .from('attendance_records')
+                        .delete()
+                        .eq('attendance_date', date)
+                        .in('participant_id', idChunk);
+                    if (error) {
+                        if (isAttendanceSchemaError(error)) throw new Error(attendanceMigrationMessage(error));
+                        throw error;
+                    }
+                }
+            } else {
+                for (const nameChunk of chunkArray(cleanNames, ATTENDANCE_DELETE_NAME_CHUNK_SIZE)) {
+                    const { error } = await supabase
+                        .from('attendance_records')
+                        .delete()
+                        .eq('attendance_date', date)
+                        .in('participant_name', nameChunk);
+                    if (error) {
+                        if (isAttendanceSchemaError(error)) throw new Error(attendanceMigrationMessage(error));
+                        throw error;
+                    }
+                }
+            }
+        }
+        return cleanNames.length * cleanDates.length;
+    }
+
+    return mockDb.deleteAttendanceRecordsForDates(cleanNames, cleanDates);
+}
+
+async function renameAttendanceDates(dateRenames: AttendanceDateRename[]) {
+    const cleanRenames = dateRenames.filter((rename) =>
+        /^\d{4}-\d{2}-\d{2}$/.test(rename.from)
+        && /^\d{4}-\d{2}-\d{2}$/.test(rename.to)
+        && rename.from !== rename.to
+    );
+    if (cleanRenames.length === 0) return 0;
+
+    let changedCount = 0;
+    if (isSupabaseConfigured && supabase) {
+        for (const rename of cleanRenames) {
+            const hasSessionIsDeleted = await hasAttendanceSessionIsDeletedColumn();
+            const sessionUpdate: Record<string, any> = { session_date: rename.to };
+            if (hasSessionIsDeleted) sessionUpdate.is_deleted = false;
+            const { data: sessionData, error: sessionError } = await supabase
+                .from('attendance_sessions')
+                .update(sessionUpdate)
+                .eq('session_date', rename.from)
+                .select('id');
+            if (sessionError) throw sessionError;
+            changedCount += sessionData?.length ?? 0;
+
+            const { data, error } = await supabase
+                .from('attendance_records')
+                .update({
+                    attendance_date: rename.to,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('attendance_date', rename.from)
+                .select('id');
+            if (error) {
+                if (isAttendanceSchemaError(error)) throw new Error(attendanceMigrationMessage(error));
+                throw error;
+            }
+            changedCount += data?.length ?? 0;
+        }
+        return changedCount;
+    }
+
+    return mockDb.renameAttendanceDates(cleanRenames);
+}
+
+async function softDeleteAttendanceDates(dates: string[]) {
+    const cleanDates = Array.from(new Set(dates.filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))));
+    if (cleanDates.length === 0) return 0;
+
+    if (isSupabaseConfigured && supabase) {
+        let changedCount = 0;
+        for (const date of cleanDates) {
+            const hasSessionIsDeleted = await hasAttendanceSessionIsDeletedColumn();
+            if (hasSessionIsDeleted) {
+                const { data: sessionData, error: sessionError } = await supabase
+                    .from('attendance_sessions')
+                    .update({ is_deleted: true })
+                    .eq('session_date', date)
+                    .select('id');
+                if (sessionError) throw sessionError;
+                changedCount += sessionData?.length ?? 0;
+            }
+
+            const { data, error } = await supabase
+                .from('attendance_records')
+                .update({
+                    is_deleted: true,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('attendance_date', date)
+                .select('id');
+            if (error) {
+                if (isAttendanceSchemaError(error)) throw new Error(attendanceMigrationMessage(error));
+                throw error;
+            }
+            changedCount += data?.length ?? 0;
+        }
+        return changedCount;
+    }
+
+    return mockDb.softDeleteAttendanceDates(cleanDates);
+}
+
+async function ensureAttendanceSessionsForDates(dates: string[]) {
+    const cleanDates = Array.from(new Set(dates.filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))));
+    if (cleanDates.length === 0) return 0;
+
+    if (isSupabaseConfigured && supabase) {
+        const periods: AttendancePeriod[] = ['morning', 'afternoon'];
+        const hasSessionIsDeleted = await hasAttendanceSessionIsDeletedColumn();
+        let changedCount = 0;
+
+        const { data: existingRows, error: existingError } = await supabase
+            .from('attendance_sessions')
+            .select(hasSessionIsDeleted ? 'id, session_date, period, is_deleted' : 'id, session_date, period')
+            .in('session_date', cleanDates);
+        if (existingError) throw existingError;
+
+        const existingByKey = new Map<string, any>();
+        for (const row of (existingRows ?? []) as any[]) {
+            existingByKey.set(`${String(row.session_date).slice(0, 10)}|${row.period}`, row);
+        }
+
+        for (const date of cleanDates) {
+            for (const period of periods) {
+                const key = `${date}|${period}`;
+                const existing = existingByKey.get(key);
+                if (existing) {
+                    if (hasSessionIsDeleted && existing.is_deleted) {
+                        const { error } = await supabase
+                            .from('attendance_sessions')
+                            .update({ is_deleted: false })
+                            .eq('id', existing.id);
+                        if (error) throw error;
+                        changedCount++;
+                    }
+                    continue;
+                }
+
+                const { error } = await supabase
+                    .from('attendance_sessions')
+                    .insert({
+                        session_date: date,
+                        period,
+                        label: null,
+                        ...(hasSessionIsDeleted ? { is_deleted: false } : {})
+                    });
+                if (error) throw error;
+                changedCount++;
+            }
+        }
+
+        return changedCount;
+    }
+
+    return mockDb.ensureAttendanceSessions(cleanDates);
+}
+
+function uniqueAttendanceDatesFromRows(rows: AttendancePayloadRow[]) {
+    return Array.from(new Set(rows
+        .map((row) => row.attendance_date)
+        .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))));
+}
+
+async function loadKnownAttendanceDateSet() {
+    const sessions = await loadAttendanceSessions(true);
+    const records = await loadAttendanceRecords(true);
+    return new Set([
+        ...sessions.map((session) => session.session_date),
+        ...records.map((record) => record.attendance_date)
+    ]);
+}
+
+async function findAttendanceConflicts(rows: AttendancePayloadRow[]) {
+    const rowsWithPrevious = rows.filter((row) => typeof row.previous_is_present === 'boolean');
+    if (rowsWithPrevious.length === 0) return [];
+
+    const latestRecords = await loadAttendanceRecords(true);
+    const latestByKey = new Map<string, boolean>();
+    for (const record of latestRecords) {
+        latestByKey.set(`${record.participant_name}|${record.attendance_date}|${record.period}`, !!record.is_present);
+    }
+
+    return rowsWithPrevious.filter((row) => {
+        const key = `${row.participant_name}|${row.attendance_date}|${row.period}`;
+        const latestValue = latestByKey.get(key) ?? false;
+        return latestValue !== row.previous_is_present;
+    });
+}
+
+async function saveAttendanceRecords(rows: AttendancePayloadRow[]) {
+    if (rows.length === 0) return 0;
+
+    if (isSupabaseConfigured && supabase) {
+        const now = new Date().toISOString();
+        const participantNames = Array.from(new Set(rows.map((row) => row.participant_name)));
+        const hasParticipantId = await hasAttendanceParticipantIdColumn();
+        const participantIdByName = hasParticipantId ? await ensureParticipantIdsByName(participantNames) : new Map<string, string>();
+        if (hasParticipantId) {
+            const missingNames = participantNames.filter((name) => !participantIdByName.has(name));
+            if (missingNames.length > 0) {
+                throw new Error(`ไม่พบ participant_id สำหรับรายชื่อ: ${missingNames.slice(0, 5).join(', ')}${missingNames.length > 5 ? '...' : ''}`);
+            }
+        }
+
+        for (const rowChunk of chunkArray(rows, ATTENDANCE_INSERT_CHUNK_SIZE)) {
+            const { error: upsertError } = await supabase
+                .from('attendance_records')
+                .upsert(rowChunk.map((row) => ({
+                    ...row,
+                    ...(hasParticipantId ? { participant_id: participantIdByName.get(row.participant_name) ?? null } : {}),
+                    is_deleted: false,
+                    updated_at: now
+                })), { onConflict: 'participant_name,attendance_date,period' });
+            if (upsertError) {
+                if (isAttendanceSchemaError(upsertError)) throw new Error(attendanceMigrationMessage(upsertError));
+                throw upsertError;
+            }
+        }
+        return rows.length;
+    }
+
+    return mockDb.upsertAttendanceRecords(rows);
+}
+
 async function resolveCollectionByEvidenceType(type: string) {
     const normalizedType = normalizeEvidenceType(type);
     if (!normalizedType) return null;
@@ -318,6 +952,8 @@ export const load: PageServerLoad = async ({ cookies }) => {
     const userRole = currentUser?.role || '';
     const participantLoad = await loadParticipants(loggedIn);
     const participants = participantLoad.participants;
+    const attendanceRecords = await loadAttendanceRecords(loggedIn);
+    const attendanceSessions = await loadAttendanceSessions(loggedIn);
 
     let collectionsList: any[] = [];
     let submissionsList: any[] = [];
@@ -338,7 +974,9 @@ export const load: PageServerLoad = async ({ cookies }) => {
             isSupabaseLive: isSupabaseConfigured,
             publicMode: true,
             participants,
-            participantsMeta: participantLoad.meta
+            participantsMeta: participantLoad.meta,
+            attendanceRecords: [],
+            attendanceSessions: []
         };
     }
 
@@ -484,7 +1122,9 @@ export const load: PageServerLoad = async ({ cookies }) => {
         usersList,
         isSupabaseLive: isSupabaseConfigured,
         participants,
-        participantsMeta: participantLoad.meta
+        participantsMeta: participantLoad.meta,
+        attendanceRecords,
+        attendanceSessions
     };
 };
 
@@ -932,6 +1572,48 @@ export const actions: Actions = {
         }
     },
 
+    saveAttendance: async ({ request, cookies }) => {
+        const currentUser = await getCurrentUser(cookies);
+        if (!canViewSubmissions(currentUser?.role || '')) {
+            return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนบันทึกการเข้างาน' });
+        }
+
+        const formData = await request.formData();
+        const payload = (formData.get('attendance_payload') as string || '').trim();
+        const dateRenamesPayload = (formData.get('attendance_date_renames') as string || '').trim();
+        const deletedDatesPayload = (formData.get('attendance_deleted_dates') as string || '').trim();
+
+        try {
+            const rows = normalizeAttendancePayload(payload);
+            const dateRenames = normalizeAttendanceDateRenames(dateRenamesPayload);
+            const deletedDates = normalizeAttendanceDeletedDates(deletedDatesPayload);
+            const savedDates = uniqueAttendanceDatesFromRows(rows);
+            const conflicts = await findAttendanceConflicts(rows);
+            if (conflicts.length > 0) {
+                return fail(409, { success: false, message: `ข้อมูลเช็คชื่อเปลี่ยนไปแล้ว ${conflicts.length} ช่อง กรุณารีโหลดและตรวจอีกครั้ง` });
+            }
+            const canManageAttendanceDates = currentUser?.username === 'guyssar';
+            if (!canManageAttendanceDates) {
+                const knownDates = await loadKnownAttendanceDateSet();
+                const newDates = [
+                    ...savedDates.filter((date) => !knownDates.has(date)),
+                    ...dateRenames.map((rename) => rename.to).filter((date) => !knownDates.has(date))
+                ];
+                if (newDates.length > 0 || dateRenames.length > 0 || deletedDates.length > 0) {
+                    return fail(403, { success: false, message: 'เฉพาะ guyssar เท่านั้นที่เพิ่ม แก้ไข หรือลบวันที่เช็คได้' });
+                }
+            }
+            const sessionCount = await ensureAttendanceSessionsForDates(savedDates);
+            const deletedCount = await softDeleteAttendanceDates(deletedDates);
+            const renamedCount = await renameAttendanceDates(dateRenames);
+            const savedCount = sessionCount + deletedCount + renamedCount + await saveAttendanceRecords(rows);
+            return { success: true, message: `บันทึกการเข้างาน ${savedCount} รายการเรียบร้อยแล้ว`, savedDates };
+        } catch (err: any) {
+            console.error('[saveAttendance] error:', formatServerError(err), err);
+            return fail(500, { success: false, message: err.message || 'บันทึกการเข้างานไม่สำเร็จ' });
+        }
+    },
+
     checkEvidenceStatus: async ({ request }) => {
         const formData = await request.formData();
         const name = (formData.get('name') as string || '').trim();
@@ -1332,15 +2014,27 @@ export const actions: Actions = {
             const collections = backupData.collections || [];
             const submissions = backupData.submissions || [];
             const participants = backupData.participants || [];
+            const attendanceSessions = backupData.attendance_sessions || backupData.attendanceSessions || [];
+            const attendanceRecords = backupData.attendance_records || backupData.attendanceRecords || [];
 
-            if (!Array.isArray(collections) || !Array.isArray(submissions) || !Array.isArray(participants)) {
+            if (!Array.isArray(collections) || !Array.isArray(submissions) || !Array.isArray(participants) || !Array.isArray(attendanceSessions) || !Array.isArray(attendanceRecords)) {
                 return fail(400, { success: false, message: 'โครงสร้าง collections, submissions หรือ participants ในไฟล์ JSON ไม่ถูกต้อง' });
             }
 
             if (isSupabaseConfigured && supabase) {
+                const { error: attendanceRecordsDeleteErr } = await supabase
+                    .from('attendance_records')
+                    .delete()
+                    .not('id', 'is', null);
+                if (attendanceRecordsDeleteErr) {
+                    console.error('[importBackupJson] Attendance records delete error:', attendanceRecordsDeleteErr);
+                    throw new Error(`ไม่สามารถล้างข้อมูลเช็คชื่อเดิมได้: ${attendanceRecordsDeleteErr.message}`);
+                }
+
                 // 1. นำเข้า Participants
                 if (participants.length > 0) {
                     const orderColumn = await getParticipantOrderColumn();
+                    const includeLegacyOrder = await hasLegacyParticipantOrderColumn();
                     const { error: participantDeleteErr } = await supabase
                         .from('participants')
                         .delete()
@@ -1353,13 +2047,17 @@ export const actions: Actions = {
                     const { error: participantErr } = await supabase
                         .from('participants')
                         .insert(
-                            participants.map((p, index) => ({
-                                id: p.id,
-                                [orderColumn]: p.list_order ?? p.order ?? index + 1,
-                                full_name: p.full_name ?? p.fullName ?? p.name,
-                                created_at: p.created_at || new Date().toISOString(),
-                                updated_at: p.updated_at || new Date().toISOString()
-                            })).filter(p => p.full_name)
+                            participants.map((p, index) => {
+                                const rowOrder = p.list_order ?? p.order ?? index + 1;
+                                return {
+                                    id: p.id,
+                                    [orderColumn]: rowOrder,
+                                    ...(includeLegacyOrder ? { order: rowOrder } : {}),
+                                    full_name: p.full_name ?? p.fullName ?? p.name,
+                                    created_at: p.created_at || new Date().toISOString(),
+                                    updated_at: p.updated_at || new Date().toISOString()
+                                };
+                            }).filter(p => p.full_name)
                         );
 
                     if (participantErr) {
@@ -1413,14 +2111,63 @@ export const actions: Actions = {
                         throw new Error(`ไม่สามารถกู้คืนรูปภาพส่งงานได้: ${subErr.message}`);
                     }
                 }
+
+                // 4. นำเข้า Attendance Sessions
+                if (attendanceSessions.length > 0) {
+                    const hasSessionIsDeleted = await hasAttendanceSessionIsDeletedColumn();
+                    const { error: attendanceSessionsDeleteErr } = await supabase
+                        .from('attendance_sessions')
+                        .delete()
+                        .not('id', 'is', null);
+                    if (attendanceSessionsDeleteErr) {
+                        console.error('[importBackupJson] Attendance sessions delete error:', attendanceSessionsDeleteErr);
+                        throw new Error(`ไม่สามารถล้างวันที่เช็คเดิมได้: ${attendanceSessionsDeleteErr.message}`);
+                    }
+
+                    const { error: attendanceSessionsErr } = await supabase
+                        .from('attendance_sessions')
+                        .insert(attendanceSessions.map((session) => ({
+                            id: session.id,
+                            session_date: String(session.session_date ?? '').slice(0, 10),
+                            period: session.period === 'afternoon' ? 'afternoon' : 'morning',
+                            label: session.label ?? null,
+                            ...(hasSessionIsDeleted ? { is_deleted: session.is_deleted ?? false } : {})
+                        })).filter((session) => /^\d{4}-\d{2}-\d{2}$/.test(session.session_date)));
+                    if (attendanceSessionsErr) {
+                        console.error('[importBackupJson] Attendance sessions insert error:', attendanceSessionsErr);
+                        throw new Error(`ไม่สามารถกู้คืนวันที่เช็คได้: ${attendanceSessionsErr.message}`);
+                    }
+                }
+
+                // 5. นำเข้า Attendance Records
+                if (attendanceRecords.length > 0) {
+                    const hasParticipantId = await hasAttendanceParticipantIdColumn();
+                    const { error: attendanceRecordsErr } = await supabase
+                        .from('attendance_records')
+                        .insert(attendanceRecords.map((record) => ({
+                            id: record.id,
+                            ...(hasParticipantId ? { participant_id: record.participant_id ?? null } : {}),
+                            participant_name: String(record.participant_name ?? '').trim().replace(/\s+/g, ' '),
+                            attendance_date: String(record.attendance_date ?? '').slice(0, 10),
+                            period: record.period === 'afternoon' ? 'afternoon' : 'morning',
+                            is_present: record.is_present ?? record.checked ?? false,
+                            is_deleted: record.is_deleted ?? false,
+                            created_at: record.created_at || new Date().toISOString(),
+                            updated_at: record.updated_at || new Date().toISOString()
+                        })).filter((record) => record.participant_name && /^\d{4}-\d{2}-\d{2}$/.test(record.attendance_date)));
+                    if (attendanceRecordsErr) {
+                        console.error('[importBackupJson] Attendance records insert error:', attendanceRecordsErr);
+                        throw new Error(`ไม่สามารถกู้คืนข้อมูลเช็คชื่อได้: ${attendanceRecordsErr.message}`);
+                    }
+                }
             } else {
                 // Fallback to mock DB
-                mockDb.importBackupData(collections, submissions, participants);
+                mockDb.importBackupData(collections, submissions, participants, attendanceSessions, attendanceRecords);
             }
 
             return { 
                 success: true, 
-                message: `นำเข้าข้อมูลสำรองสำเร็จเรียบร้อย! (รายชื่อ: ${participants.length} รายการ, หัวข้อส่งงาน: ${collections.length} รายการ, รูปภาพส่งงาน: ${submissions.length} รูป)` 
+                message: `นำเข้าข้อมูลสำรองสำเร็จเรียบร้อย! (รายชื่อ: ${participants.length} รายการ, หัวข้อส่งงาน: ${collections.length} รายการ, รูปภาพส่งงาน: ${submissions.length} รูป, วันที่เช็ค: ${attendanceSessions.length} รายการ, เช็คชื่อ: ${attendanceRecords.length} รายการ)` 
             };
         } catch (err: any) {
             console.error('[importBackupJson] Restore error:', err);

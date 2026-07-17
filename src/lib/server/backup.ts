@@ -1,8 +1,7 @@
-import { env } from '$env/dynamic/private';
 import { supabase, isSupabaseConfigured } from './supabase';
 import * as mockDb from './db';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { getR2Client } from './r2';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { downloadFromR2, getR2Client, R2_PUBLIC_URL } from './r2';
 
 export interface BackupResult {
     success: boolean;
@@ -15,30 +14,50 @@ export interface BackupResult {
 
 
 /**
- * Downloads image file from Supabase Storage or via HTTP fetch or from Data URL
+ * Downloads image file from Cloudflare R2, HTTP URL, Supabase Storage, or Data URL.
  */
-async function getFileBuffer(submission: any): Promise<{ buffer: Buffer; contentType: string }> {
-    // 1. If live Supabase, try to download from Storage first
-    if (isSupabaseConfigured && supabase && submission.file_path) {
+async function getFileBuffer(submission: any, r2BucketBinding?: any): Promise<{ buffer: Buffer; contentType: string }> {
+    // 1. Primary source: Cloudflare R2 object key.
+    if (submission.file_path) {
         try {
-            const { data, error } = await supabase.storage
-                .from('images')
-                .download(submission.file_path);
-            
-            if (!error && data) {
-                const arrayBuffer = await data.arrayBuffer();
-                return {
-                    buffer: Buffer.from(arrayBuffer),
-                    contentType: data.type || 'image/jpeg'
-                };
-            }
-            console.warn(`Supabase Storage download failed for ${submission.file_path}, trying fallback URL...`, error);
-        } catch (e) {
-            console.warn(`Error downloading from Supabase Storage:`, e);
+            const object = await downloadFromR2(submission.file_path, r2BucketBinding);
+            if (object) return object;
+        } catch (e: any) {
+            console.warn(`R2 download failed for ${submission.file_path}, trying fallback URL...`, e?.message || e);
         }
     }
 
-    // 2. Fallback: Parse Data URL if present (typically in Mock DB mode)
+    // 2. Fallback: HTTP Fetch URL (R2 public URL is stored in img_url for new uploads)
+    const url = submission.img_url || submission.img_data || (submission.file_path ? `${R2_PUBLIC_URL}/${submission.file_path}` : '');
+    if (url && url.startsWith('http')) {
+        const response = await fetch(url);
+        if (response.ok) {
+            const contentType = response.headers.get('content-type') || 'image/jpeg';
+            const arrayBuffer = await response.arrayBuffer();
+            return {
+                buffer: Buffer.from(arrayBuffer),
+                contentType
+            };
+        }
+        console.warn(`HTTP image fetch failed for ${url}: ${response.status} ${response.statusText}`);
+    }
+
+    // 3. Legacy fallback: Supabase Storage (old deployments only)
+    if (isSupabaseConfigured && supabase && submission.file_path) {
+        const { data, error } = await supabase.storage
+            .from('images')
+            .download(submission.file_path);
+
+        if (!error && data) {
+            const arrayBuffer = await data.arrayBuffer();
+            return {
+                buffer: Buffer.from(arrayBuffer),
+                contentType: data.type || 'image/jpeg'
+            };
+        }
+    }
+
+    // 4. Fallback: Parse Data URL if present (typically in Mock DB mode)
     const imgData = submission.img_data || submission.img_url || '';
     if (imgData.startsWith('data:')) {
         const matches = imgData.match(/^data:([^;]+);base64,(.+)$/);
@@ -52,22 +71,30 @@ async function getFileBuffer(submission: any): Promise<{ buffer: Buffer; content
         }
     }
 
-    // 3. Fallback: HTTP Fetch URL
-    const url = submission.img_url || submission.img_data;
-    if (url && url.startsWith('http')) {
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`HTTP fetch failed for URL: ${url}`);
-        }
-        const contentType = response.headers.get('content-type') || 'image/jpeg';
-        const arrayBuffer = await response.arrayBuffer();
-        return {
-            buffer: Buffer.from(arrayBuffer),
-            contentType
-        };
+    throw new Error(`Unable to retrieve file content for submission: ${submission.name}`);
+}
+
+async function uploadBackupObject(target: {
+    r2BucketBinding?: any;
+    client?: any;
+    bucketName: string;
+    key: string;
+    body: string | Buffer;
+    contentType: string;
+}) {
+    if (target.r2BucketBinding) {
+        await target.r2BucketBinding.put(target.key, target.body, {
+            httpMetadata: { contentType: target.contentType }
+        });
+        return;
     }
 
-    throw new Error(`Unable to retrieve file content for submission: ${submission.name}`);
+    await target.client.send(new PutObjectCommand({
+        Bucket: target.bucketName,
+        Key: target.key,
+        Body: target.body,
+        ContentType: target.contentType
+    }));
 }
 
 /**
@@ -96,6 +123,8 @@ export async function runBackup(r2BucketBinding?: any): Promise<BackupResult> {
         let collections: any[] = [];
         let submissions: any[] = [];
         let participants: any[] = [];
+        let attendanceSessions: any[] = [];
+        let attendanceRecords: any[] = [];
 
         if (isSupabaseConfigured && supabase) {
             const { data: cols, error: colsErr } = await supabase
@@ -118,11 +147,31 @@ export async function runBackup(r2BucketBinding?: any): Promise<BackupResult> {
             } else {
                 participants = participantRows || [];
             }
+
+            const { data: attendanceRows, error: attendanceErr } = await supabase
+                .from('attendance_records')
+                .select('*');
+            if (attendanceErr) {
+                console.warn('Attendance records backup skipped:', attendanceErr.message);
+            } else {
+                attendanceRecords = attendanceRows || [];
+            }
+
+            const { data: attendanceSessionRows, error: attendanceSessionsErr } = await supabase
+                .from('attendance_sessions')
+                .select('*');
+            if (attendanceSessionsErr) {
+                console.warn('Attendance sessions backup skipped:', attendanceSessionsErr.message);
+            } else {
+                attendanceSessions = attendanceSessionRows || [];
+            }
         } else {
             // Fallback mock DB
             collections = mockDb.collections;
             submissions = mockDb.submissions;
             participants = mockDb.participants;
+            attendanceSessions = mockDb.attendanceSessions;
+            attendanceRecords = mockDb.attendanceRecords;
         }
 
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -137,6 +186,8 @@ export async function runBackup(r2BucketBinding?: any): Promise<BackupResult> {
             total_collections: collections.length,
             total_submissions: submissions.length,
             total_participants: participants.length,
+            total_attendance_sessions: attendanceSessions.length,
+            total_attendance_records: attendanceRecords.length,
             collections: collections.map(c => ({
                 id: c.id,
                 name: c.name,
@@ -163,22 +214,37 @@ export async function runBackup(r2BucketBinding?: any): Promise<BackupResult> {
                 full_name: p.full_name ?? p.fullName ?? p.name,
                 created_at: p.created_at,
                 updated_at: p.updated_at
+            })),
+            attendance_sessions: attendanceSessions.map((session) => ({
+                id: session.id,
+                session_date: session.session_date,
+                period: session.period,
+                label: session.label ?? null,
+                is_deleted: session.is_deleted ?? false
+            })),
+            attendance_records: attendanceRecords.map((record) => ({
+                id: record.id,
+                participant_id: record.participant_id ?? null,
+                session_id: record.session_id ?? null,
+                participant_name: record.participant_name,
+                attendance_date: record.attendance_date,
+                period: record.period,
+                is_present: record.is_present ?? record.checked ?? false,
+                is_deleted: record.is_deleted ?? false,
+                created_at: record.created_at,
+                updated_at: record.updated_at
             }))
         };
 
         const manifestKey = `${backupFolder}/metadata.json`;
-        if (r2BucketBinding) {
-            await r2BucketBinding.put(manifestKey, JSON.stringify(manifest, null, 2), {
-                httpMetadata: { contentType: 'application/json' }
-            });
-        } else {
-            await client.send(new PutObjectCommand({
-                Bucket: bucketName,
-                Key: manifestKey,
-                Body: JSON.stringify(manifest, null, 2),
-                ContentType: 'application/json'
-            }));
-        }
+        await uploadBackupObject({
+            r2BucketBinding,
+            client,
+            bucketName,
+            key: manifestKey,
+            body: JSON.stringify(manifest, null, 2),
+            contentType: 'application/json'
+        });
 
         console.log(`✅ Uploaded metadata.json manifest to R2.`);
 
@@ -190,23 +256,18 @@ export async function runBackup(r2BucketBinding?: any): Promise<BackupResult> {
         for (const sub of submissions) {
             try {
                 // Get image buffer and content type
-                const { buffer, contentType } = await getFileBuffer(sub);
+                const { buffer, contentType } = await getFileBuffer(sub, r2BucketBinding);
                 
                 // R2 Key path
                 const imageKey = `${backupFolder}/images/${sub.file_path}`;
-                
-                if (r2BucketBinding) {
-                    await r2BucketBinding.put(imageKey, buffer, {
-                        httpMetadata: { contentType }
-                    });
-                } else {
-                    await client.send(new PutObjectCommand({
-                        Bucket: bucketName,
-                        Key: imageKey,
-                        Body: buffer,
-                        ContentType: contentType
-                    }));
-                }
+                await uploadBackupObject({
+                    r2BucketBinding,
+                    client,
+                    bucketName,
+                    key: imageKey,
+                    body: buffer,
+                    contentType
+                });
 
                 successCount++;
                 totalSize += buffer.length;

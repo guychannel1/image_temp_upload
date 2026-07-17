@@ -19,6 +19,7 @@ BEGIN
           AND column_name = 'order'
     ) THEN
         EXECUTE 'UPDATE participants SET list_order = "order" WHERE list_order IS NULL AND "order" IS NOT NULL';
+        EXECUTE 'ALTER TABLE participants ALTER COLUMN "order" DROP NOT NULL';
     END IF;
 END $$;
 UPDATE participants SET list_order = id_order.row_number

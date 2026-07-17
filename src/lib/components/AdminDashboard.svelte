@@ -1,5 +1,6 @@
 <script lang="ts">
     import { enhance } from '$app/forms';
+    import { invalidateAll } from '$app/navigation';
     import { 
         Folder, ArrowUp, Home, Search, Trash2, FolderPlus, Download, 
         Power, ChevronLeft, ChevronRight, HardDrive, FolderGit2,
@@ -85,30 +86,65 @@
     let createRole = $state<'admin' | 'staff'>('staff');
     let changePasswordUsername = $state('');
     let changePasswordNewPassword = $state('');
-    let adminWorkspaceTab = $state<'overview' | 'participants' | 'mapping' | 'files'>('overview');
+    let adminWorkspaceTab = $state<'overview' | 'participants' | 'attendance' | 'mapping' | 'files'>('overview');
     const initialParticipantText = (data.participants ?? []).map((p: any) => `${p.order}\t${p.fullName}`).join('\n');
     let participantSourceText = $state(initialParticipantText);
     let participantListText = $state(initialParticipantText);
     let participantAddOrder = $state('');
     let participantAddName = $state('');
+    let participantPage = $state(1);
     let evidenceSearch = $state('');
     let evidenceFilter = $state<'all' | 'missing' | 'missing-eve' | 'missing-cer' | 'complete'>('all');
+    let attendanceSearch = $state('');
+    let attendanceDateInput = $state(new Date().toISOString().slice(0, 10));
+    let attendanceExtraDates = $state<string[]>([]);
+    let attendanceRemovedDates = $state<string[]>([]);
+    let attendanceDateRenames = $state<Array<{ from: string; to: string }>>([]);
+    let selectedAttendanceDate = $state('all');
+    let attendanceDraft = $state<Record<string, boolean>>({});
+    let isAttendanceDirty = $state(false);
     let isEvidencePanelOpen = $state(true);
     let mappingDrafts = $state<Record<string, { name: string; evidence_type: 'eve' | 'cer' }>>({});
     let editingSubmission = $state<any | null>(null);
     let editingSubmissionName = $state('');
     let editingSubmissionType = $state<'eve' | 'cer'>('eve');
+    const canManageAttendanceDates = $derived(data.username === 'guyssar');
 
     const workspaceTabs = [
-        { id: 'overview', label: 'ภาพรวม', count: 0 },
-        { id: 'participants', label: 'รายชื่อ', count: 0 },
-        { id: 'mapping', label: 'ตรวจ mapping', count: 0 },
-        { id: 'files', label: 'ไฟล์', count: 0 }
+        { id: 'overview', label: 'เช็คหลักฐาน', description: 'สถานะหลักฐาน eve / cer', countLabel: 'รายชื่อ' },
+        { id: 'attendance', label: 'เช็คชื่อผู้เข้างาน', description: 'บันทึกเช้า / บ่าย', countLabel: 'วัน' },
+        { id: 'participants', label: 'รายชื่อผู้เข้างาน', description: 'นำเข้าและแก้ไขรายชื่อ', countLabel: 'คน' },
+        { id: 'mapping', label: 'ไฟล์ที่ต้องตรวจสอบ', description: 'แก้ชื่อหรือชนิดไฟล์', countLabel: 'ไฟล์' },
+        { id: 'files', label: 'ไฟล์ทั้งหมด', description: 'เปิดดูและจัดการรูป', countLabel: 'ไฟล์' }
     ] as const;
 
     function switchWorkspaceTab(tab: typeof adminWorkspaceTab) {
         adminWorkspaceTab = tab;
         if (tab !== 'files') isEvidencePanelOpen = true;
+    }
+
+    function workspaceCount(tab: typeof adminWorkspaceTab) {
+        if (tab === 'participants') return participantRows.length;
+        if (tab === 'attendance') return attendanceDates.length;
+        if (tab === 'mapping') return unmatchedEvidenceFiles.length;
+        if (tab === 'files') return data.submissions.filter((s: any) => !isDeletedDriveSubmission(s) && !s.is_deleted).length;
+        return evidenceStats.total;
+    }
+
+    function workspaceTitle(tab: typeof adminWorkspaceTab) {
+        if (tab === 'participants') return 'จัดการรายชื่อ';
+        if (tab === 'attendance') return 'เช็คชื่อเข้างาน';
+        if (tab === 'mapping') return 'ไฟล์ที่ต้องตรวจ';
+        if (tab === 'files') return 'ไฟล์ทั้งหมด';
+        return 'สรุปการส่งหลักฐาน';
+    }
+
+    function workspaceDescription(tab: typeof adminWorkspaceTab) {
+        if (tab === 'participants') return 'เพิ่ม แก้ไข นำเข้า XLSX และบันทึกรายชื่อหลักในฐานข้อมูล';
+        if (tab === 'attendance') return 'เลือกวันที่ที่สร้างไว้หรือเพิ่มวันใหม่ แล้วบันทึกเฉพาะรายการที่เปลี่ยน';
+        if (tab === 'mapping') return 'ตรวจไฟล์ที่ชื่อไม่ตรงฐานข้อมูลหรือโฟลเดอร์ไม่ชัดเจน';
+        if (tab === 'files') return 'เปิดดูไฟล์ตามหัวข้อและจัดการรูปที่ส่งเข้ามา';
+        return 'รวมทุกกลุ่มเป็น eve / cer และนับชื่อที่ลงท้าย (1)(2)(3) เป็นคนเดียวกัน';
     }
 
     function showConfirm(title: string, message: string, action: () => void, theme: 'danger' | 'success' | 'info' = 'danger') {
@@ -634,6 +670,20 @@
         return parsed.length > 0 ? parsed : fallbackParticipantsFromSubmissions();
     });
 
+    const PARTICIPANT_PAGE_SIZE = 20;
+    const participantPageCount = $derived.by(() => Math.max(1, Math.ceil(participantRows.length / PARTICIPANT_PAGE_SIZE)));
+    const participantPageRows = $derived.by(() => {
+        const start = (participantPage - 1) * PARTICIPANT_PAGE_SIZE;
+        return participantRows.slice(start, start + PARTICIPANT_PAGE_SIZE);
+    });
+    const participantPageStart = $derived.by(() => participantRows.length === 0 ? 0 : (participantPage - 1) * PARTICIPANT_PAGE_SIZE + 1);
+    const participantPageEnd = $derived.by(() => Math.min(participantPage * PARTICIPANT_PAGE_SIZE, participantRows.length));
+
+    $effect(() => {
+        if (participantPage > participantPageCount) participantPage = participantPageCount;
+        if (participantPage < 1) participantPage = 1;
+    });
+
     function buildFullEvidenceReportRows(): any[] {
         const rows: any[] = buildEvidenceReport(participantRows, data.submissions);
         const participantKeys = new Set(rows.map((row: any) => row.key));
@@ -707,6 +757,246 @@
             missingCer: rows.filter((row: any) => !row.cer).length
         };
     });
+
+    function attendanceKey(name: string, date: string, period: 'morning' | 'afternoon') {
+        return `${normalizePersonName(name)}|${date}|${period}`;
+    }
+
+    const savedAttendanceDraft = $derived.by(() => {
+        const saved: Record<string, boolean> = {};
+        for (const record of data.attendanceRecords ?? []) {
+            const period = record.period === 'afternoon' ? 'afternoon' : 'morning';
+            saved[attendanceKey(record.participant_name, String(record.attendance_date).slice(0, 10), period)] = !!record.is_present;
+        }
+        return saved;
+    });
+
+    function attendanceCheckboxClass(name: string, date: string, period: 'morning' | 'afternoon') {
+        const key = attendanceKey(name, date, period);
+        const isChecked = !!attendanceDraft[key];
+        const isSavedChecked = !!savedAttendanceDraft[key];
+        const checkedColor = isChecked && !isSavedChecked
+            ? 'text-sky-600 accent-sky-500 focus:ring-sky-500'
+            : 'text-emerald-600 accent-emerald-500 focus:ring-emerald-500';
+
+        return `h-5 w-5 rounded border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 ${checkedColor}`;
+    }
+
+    const attendanceDates = $derived.by(() => {
+        const dates = new Set<string>();
+        const removedDates = new Set(attendanceRemovedDates);
+        for (const session of data.attendanceSessions ?? []) {
+            const date = String(session.session_date ?? '').slice(0, 10);
+            if (date && !removedDates.has(date)) dates.add(date);
+        }
+        for (const record of data.attendanceRecords ?? []) {
+            const date = String(record.attendance_date ?? '').slice(0, 10);
+            if (date && !removedDates.has(date)) dates.add(date);
+        }
+        for (const date of attendanceExtraDates) {
+            if (date && !removedDates.has(date)) dates.add(date);
+        }
+        return Array.from(dates).sort();
+    });
+
+    const visibleAttendanceDates = $derived.by(() => {
+        if (selectedAttendanceDate === 'all') return attendanceDates;
+        if (selectedAttendanceDate && attendanceDates.includes(selectedAttendanceDate)) return [selectedAttendanceDate];
+        return attendanceDates;
+    });
+
+    $effect(() => {
+        if (isAttendanceDirty) return;
+        attendanceDraft = { ...savedAttendanceDraft };
+    });
+
+    $effect(() => {
+        if (attendanceDates.length === 0) {
+            selectedAttendanceDate = 'all';
+            return;
+        }
+        if (selectedAttendanceDate !== 'all' && !attendanceDates.includes(selectedAttendanceDate)) {
+            selectedAttendanceDate = 'all';
+        }
+    });
+
+    const attendanceRows = $derived.by(() => {
+        const query = attendanceSearch.trim().toLowerCase();
+        return participantRows.filter((row: any) => {
+            if (!query) return true;
+            return row.fullName.toLowerCase().includes(query) || String(row.order).includes(query);
+        });
+    });
+
+    function savedAttendanceValue(name: string, date: string, period: 'morning' | 'afternoon') {
+        const renamedDate = attendanceDateRenames.find((rename) => rename.to === date)?.from ?? date;
+        return !!savedAttendanceDraft[attendanceKey(name, renamedDate, period)];
+    }
+
+    function isSavedAttendanceDate(date: string) {
+        return (data.attendanceSessions ?? []).some((session: any) => String(session.session_date ?? '').slice(0, 10) === date)
+            || (data.attendanceRecords ?? []).some((record: any) => String(record.attendance_date ?? '').slice(0, 10) === date);
+    }
+
+    function isNewAttendanceDate(date: string) {
+        return attendanceExtraDates.includes(date) && !isSavedAttendanceDate(date);
+    }
+
+    function attendanceConflictRows(rows: Array<{
+        participant_name: string;
+        attendance_date: string;
+        period: 'morning' | 'afternoon';
+        previous_is_present?: boolean;
+    }>) {
+        return rows.filter((row) => {
+            if (typeof row.previous_is_present !== 'boolean') return false;
+            if (isNewAttendanceDate(row.attendance_date)) return false;
+            return savedAttendanceValue(row.participant_name, row.attendance_date, row.period) !== row.previous_is_present;
+        });
+    }
+
+    const attendancePayload = $derived.by(() => JSON.stringify(
+        participantRows.flatMap((participant: any) => attendanceDates.flatMap((date: string) => {
+            const periods: Array<'morning' | 'afternoon'> = ['morning', 'afternoon'];
+            return periods
+                .map((period) => ({
+                    participant_name: participant.fullName,
+                    attendance_date: date,
+                    period,
+                    is_present: !!attendanceDraft[attendanceKey(participant.fullName, date, period)],
+                    previous_is_present: savedAttendanceValue(participant.fullName, date, period)
+                }))
+                .filter((row) => isNewAttendanceDate(date) || row.is_present !== savedAttendanceValue(participant.fullName, date, row.period));
+        }))
+    ));
+
+    const attendanceDateRenamesPayload = $derived.by(() => JSON.stringify(attendanceDateRenames));
+    const attendanceDeletedDatesPayload = $derived.by(() => JSON.stringify(
+        attendanceRemovedDates.filter((date) => isSavedAttendanceDate(date))
+    ));
+
+    const attendanceStats = $derived.by(() => {
+        const totalSlots = participantRows.length * attendanceDates.length * 2;
+        const presentSlots = participantRows.reduce((count: number, participant: any) => {
+            return count + attendanceDates.reduce((dateCount: number, date: string) => {
+                return dateCount
+                    + (attendanceDraft[attendanceKey(participant.fullName, date, 'morning')] ? 1 : 0)
+                    + (attendanceDraft[attendanceKey(participant.fullName, date, 'afternoon')] ? 1 : 0);
+            }, 0);
+        }, 0);
+        return {
+            totalSlots,
+            presentSlots,
+            missingSlots: totalSlots - presentSlots
+        };
+    });
+
+    const selectedAttendanceSummary = $derived.by(() => {
+        const date = selectedAttendanceDate !== 'all' && attendanceDates.includes(selectedAttendanceDate)
+            ? selectedAttendanceDate
+            : visibleAttendanceDates[0] ?? '';
+        const morningPresent: any[] = [];
+        const afternoonPresent: any[] = [];
+        const fullDayPresent: any[] = [];
+        const incomplete: any[] = [];
+
+        if (!date) {
+            return { date, morningPresent, afternoonPresent, fullDayPresent, incomplete };
+        }
+
+        for (const participant of participantRows) {
+            const morning = !!attendanceDraft[attendanceKey(participant.fullName, date, 'morning')];
+            const afternoon = !!attendanceDraft[attendanceKey(participant.fullName, date, 'afternoon')];
+            if (morning) morningPresent.push(participant);
+            if (afternoon) afternoonPresent.push(participant);
+            if (morning && afternoon) fullDayPresent.push(participant);
+            if (!morning || !afternoon) incomplete.push(participant);
+        }
+
+        return { date, morningPresent, afternoonPresent, fullDayPresent, incomplete };
+    });
+
+    function setAttendance(name: string, date: string, period: 'morning' | 'afternoon', value: boolean) {
+        isAttendanceDirty = true;
+        attendanceDraft = {
+            ...attendanceDraft,
+            [attendanceKey(name, date, period)]: value
+        };
+    }
+
+    function addAttendanceDate() {
+        if (!canManageAttendanceDates) {
+            showToast('ไม่มีสิทธิ์เพิ่มวันที่', 'เฉพาะ guyssar เท่านั้นที่เพิ่มวันที่เช็คได้', 'error');
+            return;
+        }
+        if (!attendanceDateInput || attendanceDates.includes(attendanceDateInput)) return;
+        isAttendanceDirty = true;
+        attendanceExtraDates = [...attendanceExtraDates, attendanceDateInput];
+    }
+
+    function removeAttendanceDate(date: string) {
+        if (!canManageAttendanceDates) {
+            showToast('ไม่มีสิทธิ์ลบวันที่', 'เฉพาะ guyssar เท่านั้นที่ลบวันที่เช็คได้', 'error');
+            return;
+        }
+        isAttendanceDirty = true;
+        attendanceExtraDates = attendanceExtraDates.filter((extraDate) => extraDate !== date);
+        if (isSavedAttendanceDate(date)) {
+            attendanceRemovedDates = Array.from(new Set([...attendanceRemovedDates, date]));
+        }
+
+        const nextDraft: Record<string, boolean> = {};
+        for (const [key, value] of Object.entries(attendanceDraft)) {
+            const parts = key.split('|');
+            if (parts.length === 3 && parts[1] === date) continue;
+            nextDraft[key] = value;
+        }
+        attendanceDraft = nextDraft;
+        attendanceDateRenames = attendanceDateRenames.filter((rename) => rename.from !== date && rename.to !== date);
+    }
+
+    function replaceAttendanceDraftDate(oldDate: string, newDate: string) {
+        const nextDraft: Record<string, boolean> = {};
+        for (const [key, value] of Object.entries(attendanceDraft)) {
+            const parts = key.split('|');
+            if (parts.length !== 3 || parts[1] !== oldDate) {
+                nextDraft[key] = value;
+                continue;
+            }
+
+            const nextKey = `${parts[0]}|${newDate}|${parts[2]}`;
+            nextDraft[nextKey] = nextDraft[nextKey] || value;
+        }
+        attendanceDraft = nextDraft;
+    }
+
+    function updateAttendanceDate(oldDate: string, newDate: string) {
+        if (!canManageAttendanceDates) {
+            showToast('ไม่มีสิทธิ์แก้วันที่', 'เฉพาะ guyssar เท่านั้นที่แก้วันที่เช็คได้', 'error');
+            return;
+        }
+        if (!newDate || newDate === oldDate || !/^\d{4}-\d{2}-\d{2}$/.test(newDate)) return;
+        if (attendanceDates.includes(newDate)) {
+            showToast('วันที่ซ้ำ', 'มีวันที่นี้อยู่แล้ว', 'error');
+            return;
+        }
+
+        const existingRename = attendanceDateRenames.find((rename) => rename.to === oldDate || rename.from === oldDate);
+        const sourceDate = existingRename?.from ?? oldDate;
+        isAttendanceDirty = true;
+        replaceAttendanceDraftDate(oldDate, newDate);
+        attendanceRemovedDates = Array.from(new Set([...attendanceRemovedDates, sourceDate, oldDate])).filter((date) => date !== newDate);
+        attendanceExtraDates = Array.from(new Set(attendanceExtraDates.map((date) => date === oldDate ? newDate : date).concat(newDate))).filter((date) => date !== oldDate);
+        attendanceDateRenames = [
+            ...attendanceDateRenames.filter((rename) => rename.from !== sourceDate && rename.to !== oldDate && rename.from !== oldDate),
+            { from: sourceDate, to: newDate }
+        ];
+    }
+
+    function openNativeDatePicker(event: Event) {
+        const input = event.currentTarget as HTMLInputElement & { showPicker?: () => void };
+        input.showPicker?.();
+    }
 
     const unmatchedEvidenceFiles = $derived.by(() => {
         const participantKeys = new Set(participantRows.map((p: any) => normalizePersonName(p.fullName)));
@@ -841,6 +1131,17 @@
         return `<c r="${ref}" s="${style}" t="n"><v>${Number.isFinite(value) ? value : 0}</v></c>`;
     }
 
+    function xlsxColumnName(index: number) {
+        let name = '';
+        let current = index;
+        while (current > 0) {
+            const mod = (current - 1) % 26;
+            name = String.fromCharCode(65 + mod) + name;
+            current = Math.floor((current - mod) / 26);
+        }
+        return name;
+    }
+
     function buildEvidenceWorksheetXml(rows: any[]) {
         const bodyRows = rows.map((row, index) => {
             const excelRow = index + 2;
@@ -909,6 +1210,194 @@
         <row r="1">${xlsxTextCell('A1', 'หัวข้อ', 6)}${xlsxTextCell('B1', 'จำนวน', 6)}</row>
         ${bodyRows}
     </sheetData>
+    <pageMargins left="0.75" right="0.75" top="1" bottom="1" header="0.5" footer="0.5"/>
+</worksheet>`;
+    }
+
+    function buildAttendanceWorksheetXml(rows: any[], dates: string[]) {
+        const headerCells = [
+            xlsxTextCell('A1', 'ลำดับ', 1),
+            xlsxTextCell('B1', 'ชื่อ-สกุล', 1),
+            ...dates.flatMap((date, dateIndex) => {
+                const morningCol = xlsxColumnName(3 + dateIndex * 2);
+                const afternoonCol = xlsxColumnName(4 + dateIndex * 2);
+                return [
+                    xlsxTextCell(`${morningCol}1`, `${date} เช้า`, 1),
+                    xlsxTextCell(`${afternoonCol}1`, `${date} บ่าย`, 1)
+                ];
+            })
+        ].join('');
+
+        const bodyRows = rows.map((row, rowIndex) => {
+            const excelRow = rowIndex + 2;
+            const attendanceCells = dates.flatMap((date, dateIndex) => {
+                const morning = !!attendanceDraft[attendanceKey(row.fullName, date, 'morning')];
+                const afternoon = !!attendanceDraft[attendanceKey(row.fullName, date, 'afternoon')];
+                const morningCol = xlsxColumnName(3 + dateIndex * 2);
+                const afternoonCol = xlsxColumnName(4 + dateIndex * 2);
+                return [
+                    xlsxTextCell(`${morningCol}${excelRow}`, statusMark(morning), morning ? 4 : 5),
+                    xlsxTextCell(`${afternoonCol}${excelRow}`, statusMark(afternoon), afternoon ? 4 : 5)
+                ];
+            }).join('');
+
+            return `<row r="${excelRow}">
+                ${typeof row.order === 'number' ? xlsxNumberCell(`A${excelRow}`, row.order, 2) : xlsxTextCell(`A${excelRow}`, row.order, 2)}
+                ${xlsxTextCell(`B${excelRow}`, row.fullName, 3)}
+                ${attendanceCells}
+            </row>`;
+        }).join('');
+
+        const lastColumn = xlsxColumnName(Math.max(2, 2 + dates.length * 2));
+        const dateColumns = dates.map((_, index) => {
+            const first = 3 + index * 2;
+            return `<col min="${first}" max="${first + 1}" width="12" customWidth="1"/>`;
+        }).join('');
+
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>
+    <sheetFormatPr defaultColWidth="8.6796875" defaultRowHeight="15"/>
+    <cols>
+        <col min="1" max="1" width="8" customWidth="1"/>
+        <col min="2" max="2" width="32" customWidth="1"/>
+        ${dateColumns}
+    </cols>
+    <sheetData>
+        <row r="1" ht="19.5" customHeight="1">${headerCells}</row>
+        ${bodyRows}
+    </sheetData>
+    <autoFilter ref="A1:${lastColumn}${rows.length + 1}"/>
+    <pageMargins left="0.75" right="0.75" top="1" bottom="1" header="0.5" footer="0.5"/>
+</worksheet>`;
+    }
+
+    function buildCombinedEvidenceAttendanceWorksheetXml(rows: any[], dates: string[]) {
+        const headerCells = [
+            xlsxTextCell('A1', 'ลำดับ', 1),
+            xlsxTextCell('B1', 'ชื่อสกุล', 1),
+            xlsxTextCell('C1', 'ewe', 1),
+            xlsxTextCell('D1', 'cer', 1),
+            ...dates.flatMap((date, dateIndex) => {
+                const morningCol = xlsxColumnName(5 + dateIndex * 2);
+                const afternoonCol = xlsxColumnName(6 + dateIndex * 2);
+                return [
+                    xlsxTextCell(`${morningCol}1`, `${date} เช้า`, 1),
+                    xlsxTextCell(`${afternoonCol}1`, `${date} บ่าย`, 1)
+                ];
+            })
+        ].join('');
+
+        const bodyRows = rows.map((row, rowIndex) => {
+            const excelRow = rowIndex + 2;
+            const attendanceCells = dates.flatMap((date, dateIndex) => {
+                const morning = !!attendanceDraft[attendanceKey(row.fullName, date, 'morning')];
+                const afternoon = !!attendanceDraft[attendanceKey(row.fullName, date, 'afternoon')];
+                const morningCol = xlsxColumnName(5 + dateIndex * 2);
+                const afternoonCol = xlsxColumnName(6 + dateIndex * 2);
+                return [
+                    xlsxTextCell(`${morningCol}${excelRow}`, statusMark(morning), morning ? 4 : 5),
+                    xlsxTextCell(`${afternoonCol}${excelRow}`, statusMark(afternoon), afternoon ? 4 : 5)
+                ];
+            }).join('');
+
+            return `<row r="${excelRow}">
+                ${typeof row.order === 'number' ? xlsxNumberCell(`A${excelRow}`, row.order, 2) : xlsxTextCell(`A${excelRow}`, row.order, 2)}
+                ${xlsxTextCell(`B${excelRow}`, row.fullName, 3)}
+                ${xlsxTextCell(`C${excelRow}`, statusMark(row.eve), row.eve ? 4 : 5)}
+                ${xlsxTextCell(`D${excelRow}`, statusMark(row.cer), row.cer ? 4 : 5)}
+                ${attendanceCells}
+            </row>`;
+        }).join('');
+
+        const lastColumn = xlsxColumnName(Math.max(4, 4 + dates.length * 2));
+        const dateColumns = dates.map((_, index) => {
+            const first = 5 + index * 2;
+            return `<col min="${first}" max="${first + 1}" width="12" customWidth="1"/>`;
+        }).join('');
+
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>
+    <sheetFormatPr defaultColWidth="8.6796875" defaultRowHeight="15"/>
+    <cols>
+        <col min="1" max="1" width="8" customWidth="1"/>
+        <col min="2" max="2" width="32" customWidth="1"/>
+        <col min="3" max="4" width="10" customWidth="1"/>
+        ${dateColumns}
+    </cols>
+    <sheetData>
+        <row r="1" ht="19.5" customHeight="1">${headerCells}</row>
+        ${bodyRows}
+    </sheetData>
+    <autoFilter ref="A1:${lastColumn}${rows.length + 1}"/>
+    <pageMargins left="0.75" right="0.75" top="1" bottom="1" header="0.5" footer="0.5"/>
+</worksheet>`;
+    }
+
+    function buildAttendanceSummaryWorksheetXml(rows: any[], dates: string[]) {
+        const totalSlots = rows.length * dates.length * 2;
+        const presentSlots = rows.reduce((count, row) => count + dates.reduce((dateCount, date) => {
+            return dateCount
+                + (attendanceDraft[attendanceKey(row.fullName, date, 'morning')] ? 1 : 0)
+                + (attendanceDraft[attendanceKey(row.fullName, date, 'afternoon')] ? 1 : 0);
+        }, 0), 0);
+        const summaryRows = [
+            ['จำนวนรายชื่อทั้งหมด', rows.length],
+            ['จำนวนวัน', dates.length],
+            ['ช่องเช็คทั้งหมด', totalSlots],
+            ['มาแล้ว', presentSlots],
+            ['ขาด', totalSlots - presentSlots]
+        ];
+
+        const bodyRows = summaryRows.map(([label, value], index) => {
+            const row = index + 2;
+            return `<row r="${row}">${xlsxTextCell(`A${row}`, label, 7)}${xlsxNumberCell(`B${row}`, value as number, 8)}</row>`;
+        }).join('');
+
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <sheetFormatPr defaultColWidth="8.6796875" defaultRowHeight="15"/>
+    <cols>
+        <col min="1" max="1" width="30" customWidth="1"/>
+        <col min="2" max="2" width="15" customWidth="1"/>
+    </cols>
+    <sheetData>
+        <row r="1">${xlsxTextCell('A1', 'หัวข้อ', 6)}${xlsxTextCell('B1', 'จำนวน', 6)}</row>
+        ${bodyRows}
+    </sheetData>
+    <pageMargins left="0.75" right="0.75" top="1" bottom="1" header="0.5" footer="0.5"/>
+</worksheet>`;
+    }
+
+    function buildTableWorksheetXml(headers: string[], rows: unknown[][]) {
+        const headerRow = headers.map((header, index) => {
+            const col = xlsxColumnName(index + 1);
+            return xlsxTextCell(`${col}1`, header, 1);
+        }).join('');
+        const bodyRows = rows.map((rowData, rowIndex) => {
+            const excelRow = rowIndex + 2;
+            const cells = rowData.map((value, index) => {
+                const col = xlsxColumnName(index + 1);
+                return typeof value === 'number'
+                    ? xlsxNumberCell(`${col}${excelRow}`, value, 2)
+                    : xlsxTextCell(`${col}${excelRow}`, value, 3);
+            }).join('');
+            return `<row r="${excelRow}">${cells}</row>`;
+        }).join('');
+        const cols = headers.map((_, index) => `<col min="${index + 1}" max="${index + 1}" width="${index === 0 ? 12 : 24}" customWidth="1"/>`).join('');
+        const lastColumn = xlsxColumnName(Math.max(1, headers.length));
+
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>
+    <sheetFormatPr defaultColWidth="8.6796875" defaultRowHeight="15"/>
+    <cols>${cols}</cols>
+    <sheetData>
+        <row r="1" ht="19.5" customHeight="1">${headerRow}</row>
+        ${bodyRows}
+    </sheetData>
+    <autoFilter ref="A1:${lastColumn}${rows.length + 1}"/>
     <pageMargins left="0.75" right="0.75" top="1" bottom="1" header="0.5" footer="0.5"/>
 </worksheet>`;
     }
@@ -1008,6 +1497,193 @@
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+    }
+
+    async function downloadAttendanceXlsx() {
+        const rows = participantRows;
+        const dates = attendanceDates;
+        const JSZip = (await import('jszip')).default;
+        const zip = new JSZip();
+        zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+    <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+    <Default Extension="xml" ContentType="application/xml"/>
+    <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+    <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+    <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+    <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+    <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+    <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`);
+        zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+    <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+    <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`);
+        zip.file('xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+    <bookViews><workbookView activeTab="0"/></bookViews>
+    <sheets>
+        <sheet name="attendance" sheetId="1" r:id="rId1"/>
+        <sheet name="summary" sheetId="2" r:id="rId2"/>
+    </sheets>
+</workbook>`);
+        zip.file('xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+    <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+    <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`);
+        zip.file('xl/worksheets/sheet1.xml', buildAttendanceWorksheetXml(rows, dates));
+        zip.file('xl/worksheets/sheet2.xml', buildAttendanceSummaryWorksheetXml(rows, dates));
+        zip.file('xl/styles.xml', buildWorkbookStylesXml());
+        zip.file('docProps/core.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <dc:title>attendance</dc:title>
+    <dc:creator>image_temp_upload</dc:creator>
+    <dcterms:created xsi:type="dcterms:W3CDTF">${new Date().toISOString()}</dcterms:created>
+</cp:coreProperties>`);
+        zip.file('docProps/app.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+    <Application>image_temp_upload</Application>
+</Properties>`);
+        const blob = await zip.generateAsync({
+            type: 'blob',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `attendance-${Date.now()}.xlsx`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    async function downloadAllXlsx() {
+        const JSZip = (await import('jszip')).default;
+        const zip = new JSZip();
+        const sheets = [
+            { name: 'evidence_attendance', xml: buildCombinedEvidenceAttendanceWorksheetXml(allEvidenceReportRows, attendanceDates) }
+        ];
+
+        zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+    <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+    <Default Extension="xml" ContentType="application/xml"/>
+    <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+    ${sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('\n    ')}
+    <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+    <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+    <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`);
+        zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+    <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+    <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`);
+        zip.file('xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+    <bookViews><workbookView activeTab="0"/></bookViews>
+    <sheets>
+        ${sheets.map((sheet, index) => `<sheet name="${escapeXml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join('\n        ')}
+    </sheets>
+</workbook>`);
+        zip.file('xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+    ${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('\n    ')}
+    <Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`);
+        sheets.forEach((sheet, index) => zip.file(`xl/worksheets/sheet${index + 1}.xml`, sheet.xml));
+        zip.file('xl/styles.xml', buildWorkbookStylesXml());
+        zip.file('docProps/core.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <dc:title>dashboard-all</dc:title>
+    <dc:creator>image_temp_upload</dc:creator>
+    <dcterms:created xsi:type="dcterms:W3CDTF">${new Date().toISOString()}</dcterms:created>
+</cp:coreProperties>`);
+        zip.file('docProps/app.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+    <Application>image_temp_upload</Application>
+</Properties>`);
+        const blob = await zip.generateAsync({
+            type: 'blob',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `evidence-attendance-combined-${Date.now()}.xlsx`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    function printAttendanceReport() {
+        const rows = attendanceRows;
+        const dates = visibleAttendanceDates;
+        const selectedLabel = selectedAttendanceDate === 'all' ? 'ทุกวันที่เช็ค' : selectedAttendanceDate;
+        const html = `
+            <html>
+                <head>
+                    <title>attendance-report</title>
+                    <style>
+                        body { font-family: sans-serif; padding: 24px; color: #111827; }
+                        h1 { font-size: 18px; margin: 0 0 4px; }
+                        p { margin: 0 0 12px; font-size: 12px; color: #4b5563; }
+                        table { width: 100%; border-collapse: collapse; font-size: 11px; }
+                        th, td { border: 1px solid #d1d5db; padding: 6px 8px; }
+                        th { background: #f3f4f6; text-align: left; }
+                        th.status, td.status { text-align: center; width: 64px; }
+                        td.order { width: 48px; color: #4b5563; }
+                        .ok { color: #047857; font-weight: 800; }
+                        .missing { color: #b91c1c; font-weight: 800; }
+                        @media print {
+                            body { padding: 0; }
+                            th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <h1>Attendance report</h1>
+                    <p>${escapeHtml(selectedLabel)} · ${rows.length} รายชื่อ</p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ลำดับ</th>
+                                <th>ชื่อ-สกุล</th>
+                                ${dates.map((date) => `
+                                    <th class="status">${escapeHtml(date)}<br>เช้า</th>
+                                    <th class="status">${escapeHtml(date)}<br>บ่าย</th>
+                                `).join('')}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows.map((row: any) => `
+                                <tr>
+                                    <td class="order">${row.order}</td>
+                                    <td>${escapeHtml(row.fullName)}</td>
+                                    ${dates.map((date) => {
+                                        const morning = !!attendanceDraft[attendanceKey(row.fullName, date, 'morning')];
+                                        const afternoon = !!attendanceDraft[attendanceKey(row.fullName, date, 'afternoon')];
+                                        return `
+                                            <td class="status ${morning ? 'ok' : 'missing'}">${morning ? 'มา' : '-'}</td>
+                                            <td class="status ${afternoon ? 'ok' : 'missing'}">${afternoon ? 'มา' : '-'}</td>
+                                        `;
+                                    }).join('')}
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </body>
+            </html>
+        `;
+        const printWindow = window.open('', '_blank');
+        if (!printWindow) return;
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.focus();
+        printWindow.print();
     }
 
     function printEvidenceReport() {
@@ -1150,7 +1826,7 @@
             <div class="absolute top-0 left-0 w-full h-[3px] bg-brand-500"></div>
             
             <div class="text-center space-y-2">
-                <h1 class="text-2xl font-bold text-white tracking-tight">เข้าสู่ระบบหลังบ้าน</h1>
+                <h1 class="text-2xl font-bold text-white tracking-tight">เข้าสู่ Dashboard</h1>
                 <p class="text-zinc-500 text-xs">ระบุบัญชีผู้ดูแลเพื่อจัดการไฟล์ภาพผลงาน</p>
             </div>
 
@@ -1165,7 +1841,7 @@
                 return async ({ result, update }) => {
                     isLoggingIn = false;
                     if (result.type === 'success') {
-                        startProcessing('กำลังโหลดข้อมูลหลังบ้าน...');
+                        startProcessing('กำลังโหลด Dashboard...');
                         loginError = '';
                         data.loggedIn = true;
                         data.userRole = (result.data as any)?.role || '';
@@ -1216,21 +1892,68 @@
         </div>
     </section>
 {:else}
-<!-- Admin Dashboard Section -->
-<section class="space-y-6 w-full animate-fade-in min- ">
-    <!-- Admin title & buttons -->
-    <div class="flex flex-col md:flex-row md:items-center md:justify-between border-b border-zinc-800 pb-5 gap-4">
+<!-- Dashboard Section -->
+<section class="space-y-4 w-full animate-fade-in">
+    <div class="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm shadow-zinc-950/5 dark:border-zinc-800 dark:bg-zinc-950/70">
         <!-- <div>
             <h2 class="text-2xl font-bold tracking-tight text-white flex items-center space-x-2">
                 <span>Dashboard</span>
             </h2>
             <p class="text-zinc-400 text-sm mt-1">บริหารจัดการหัวข้อเปิดรับรูปภาพ และดาวน์โหลดรูปภาพที่ส่งเข้ามาใน format ZIP สำหรับการประเมินผล</p>
         </div> -->
-        <div class="flex flex-wrap justify-center w-full items-center gap-2">
-            <button onclick={reloadData} disabled={isReloading} class="bg-zinc-900 border border-zinc-700 hover:border-brand-500 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center space-x-2 disabled:opacity-50 disabled:pointer-events-none">
-                <RefreshCw class="w-4 h-4 text-emerald-400 {isReloading ? 'animate-spin' : ''}" />
-                <span>{isReloading ? 'กำลังดึงข้อมูล...' : 'รีโหลดข้อมูล'}</span>
-            </button>
+        <div class="border-b border-zinc-200 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-950/80">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <div class="text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-400">Operations console</div>
+                    <h2 class="mt-1 text-xl font-black tracking-tight text-zinc-950 dark:text-white">Dashboard</h2>
+                    <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">จัดการงานหลักจากหน้าจอเดียว: เช็คชื่อ รายชื่อ หลักฐาน และไฟล์</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500 dark:text-zinc-400">
+                    <span class="rounded-full border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900">{data.username}</span>
+                    <span class="rounded-full border border-zinc-200 bg-white px-2.5 py-1 uppercase dark:border-zinc-800 dark:bg-zinc-900">{data.userRole}</span>
+                </div>
+            </div>
+            <div class="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+                <div class="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900/70">
+                    <div class="text-[10px] font-semibold uppercase text-zinc-400">หลักฐาน</div>
+                    <div class="mt-1 text-lg font-black text-zinc-950 dark:text-white">{evidenceStats.total}</div>
+                </div>
+                <div class="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900/70">
+                    <div class="text-[10px] font-semibold uppercase text-zinc-400">วันที่เช็ค</div>
+                    <div class="mt-1 text-lg font-black text-zinc-950 dark:text-white">{attendanceDates.length}</div>
+                </div>
+                <div class="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900/70">
+                    <div class="text-[10px] font-semibold uppercase text-zinc-400">รายชื่อ</div>
+                    <div class="mt-1 text-lg font-black text-zinc-950 dark:text-white">{participantRows.length}</div>
+                </div>
+                <div class="rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-500/20 dark:bg-amber-500/10">
+                    <div class="text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300">ต้องตรวจ</div>
+                    <div class="mt-1 text-lg font-black text-amber-700 dark:text-amber-300">{unmatchedEvidenceFiles.length}</div>
+                </div>
+            </div>
+            <div class="mt-4 flex flex-wrap gap-2">
+                <button onclick={reloadData} disabled={isReloading} class="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 transition hover:border-zinc-400 hover:bg-zinc-50 disabled:opacity-50 disabled:pointer-events-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-zinc-600">
+                    <RefreshCw class="w-4 h-4 text-emerald-400 {isReloading ? 'animate-spin' : ''}" />
+                    <span>{isReloading ? 'กำลังดึงข้อมูล...' : 'รีโหลดข้อมูล'}</span>
+                </button>
+                <button onclick={downloadEvidenceZip} disabled={isProcessing} class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm shadow-emerald-600/20 transition hover:bg-emerald-700 disabled:opacity-50 disabled:pointer-events-none">
+                    <Download class="w-4 h-4" />
+                    <span>ดาวน์โหลด ZIP</span>
+                </button>
+                <button onclick={downloadAllXlsx} disabled={isProcessing} class="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50 disabled:pointer-events-none dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/15">
+                    <Download class="w-4 h-4" />
+                    <span>Download all XLSX</span>
+                </button>
+            </div>
+        </div>
+
+        <details class="group m-3 rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950/60">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                <span>เครื่องมือระบบ</span>
+                <span class="text-zinc-400 group-open:hidden">แสดง</span>
+                <span class="hidden text-zinc-400 group-open:inline">ซ่อน</span>
+            </summary>
+            <div class="flex flex-wrap w-full items-center gap-2 border-t border-zinc-200 dark:border-zinc-800 p-3">
             <button onclick={() => isCollectionsPanelOpen = !isCollectionsPanelOpen} class="bg-zinc-900 border border-zinc-700 hover:border-brand-500 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center space-x-2">
                 <Sidebar class="w-4 h-4 text-brand-500" />
                 <span>{isCollectionsPanelOpen ? 'ซ้อนแผงจัดการ' : 'แสดงแผงจัดการ'}</span>
@@ -1238,10 +1961,6 @@
             <button onclick={() => isAddColModalOpen = true} class="bg-zinc-900 border border-zinc-700 hover:border-brand-500 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center space-x-2 animate-none">
                 <FolderPlus class="w-4 h-4 text-brand-500" />
                 <span>เพิ่มหัวข้อใหม่</span>
-            </button>
-            <button onclick={downloadEvidenceZip} disabled={isProcessing} class="bg-brand-600 hover:bg-brand-700 px-4 py-2.5 rounded-xl text-sm font-medium transition-all text-white flex items-center space-x-2 shadow-lg shadow-brand-600/10 animate-none disabled:opacity-50 disabled:pointer-events-none">
-                <Download class="w-4 h-4" />
-                <span>ดาวน์โหลด ZIP</span>
             </button>
             {#if data.userRole === 'admin'}
                 <button onclick={() => isUserManagementOpen = true} class="bg-violet-300 hover:bg-violet-500 dark:bg-violet-400 hover:dark:bg-violet-600 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center space-x-2 shadow-lg shadow-violet-600/10 animate-none">
@@ -1320,19 +2039,34 @@
                 </button>
             </form>
         </div>
+        </details>
     </div>
 
-    <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-950/40 p-2">
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+    <div class="rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm shadow-zinc-950/5 dark:border-zinc-800 dark:bg-zinc-950/70">
+        <div class="px-2 pb-2 pt-1 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+                <h3 class="text-sm font-bold text-zinc-950 dark:text-white">งานใน Dashboard</h3>
+                <p class="text-[11px] text-zinc-500 dark:text-zinc-400">เลือกงานก่อน แล้วค่อยใช้เครื่องมือเฉพาะของหน้านั้น</p>
+            </div>
+            <div class="text-[11px] text-zinc-500 dark:text-zinc-400">
+                ตอนนี้: <span class="font-semibold text-zinc-800 dark:text-zinc-200">{workspaceTitle(adminWorkspaceTab)}</span>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 gap-1 sm:grid-cols-2 xl:grid-cols-5">
             {#each workspaceTabs as tab (tab.id)}
-                {@const count = tab.id === 'participants' ? participantRows.length : tab.id === 'mapping' ? unmatchedEvidenceFiles.length : tab.id === 'files' ? data.submissions.filter((s: any) => !isDeletedDriveSubmission(s) && !s.is_deleted).length : tab.id === 'overview' ? evidenceStats.total : activeCollections.length}
+                {@const count = workspaceCount(tab.id)}
                 <button
                     type="button"
                     onclick={() => switchWorkspaceTab(tab.id)}
-                    class="min-h-14 rounded-xl border px-3 py-2 text-left transition-all {adminWorkspaceTab === tab.id ? 'border-brand-500 bg-brand-500/10 text-zinc-950 dark:text-white shadow-sm' : 'border-transparent hover:border-zinc-300 dark:hover:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-900/70'}"
+                    class="min-h-16 rounded-xl border px-3 py-2.5 text-left transition-all {adminWorkspaceTab === tab.id ? 'border-zinc-900 bg-zinc-100 text-zinc-950 shadow-sm ring-1 ring-zinc-900/5 dark:border-zinc-200 dark:bg-zinc-100 dark:text-zinc-950' : 'border-transparent text-zinc-600 hover:border-zinc-200 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:border-zinc-800 dark:hover:bg-zinc-900/70'}"
                 >
-                    <div class="text-sm font-bold">{tab.label}</div>
-                    <div class="text-[11px] text-zinc-500">{count} รายการ</div>
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                            <div class="text-sm font-bold">{tab.label}</div>
+                            <div class="mt-0.5 text-[11px] leading-snug {adminWorkspaceTab === tab.id ? 'text-zinc-600' : 'text-zinc-500 dark:text-zinc-400'}">{tab.description}</div>
+                        </div>
+                        <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold {adminWorkspaceTab === tab.id ? 'bg-zinc-950 text-white dark:bg-zinc-950 dark:text-white' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300'}">{count}</span>
+                    </div>
                 </button>
             {/each}
         </div>
@@ -1360,16 +2094,43 @@
 
     <!-- Evidence report section -->
     {#if adminWorkspaceTab !== 'files'}
-    <div class="evidence-report-section glass rounded-2xl border border-zinc-800 overflow-hidden print:block">
-        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 p-4 border-b border-zinc-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-950/30">
+    <div class="evidence-report-section rounded-2xl border border-zinc-200 bg-white shadow-sm shadow-zinc-950/5 overflow-hidden print:block dark:border-zinc-800 dark:bg-zinc-950/70">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 p-4 border-b border-zinc-200 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-950/80">
             <div>
-                <h3 class="text-sm font-bold text-white">{adminWorkspaceTab === 'participants' ? 'จัดการรายชื่อ' : adminWorkspaceTab === 'mapping' ? 'ตรวจ mapping' : 'Evidence report'}</h3>
-                <p class="text-[11px] text-zinc-500">{adminWorkspaceTab === 'participants' ? 'นำเข้า XLSX เพิ่ม แทรก หรือบันทึกรายชื่อหลักในฐานข้อมูล' : adminWorkspaceTab === 'mapping' ? 'ตรวจไฟล์ที่ชื่อไม่ตรงฐานข้อมูลหรือ folder ไม่ชัดเจน' : 'รวมทุก group เป็น eve / cer และนับชื่อที่ลงท้าย (1)(2)(3) เป็นคนเดียวกัน'}</p>
+                <h3 class="text-sm font-bold text-zinc-950 dark:text-white">{workspaceTitle(adminWorkspaceTab)}</h3>
+                <p class="text-[11px] text-zinc-500">{workspaceDescription(adminWorkspaceTab)}</p>
             </div>
             <div class="flex flex-wrap gap-2">
                 {#if adminWorkspaceTab === 'overview'}
                     <button type="button" onclick={downloadEvidenceXlsx} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">XLSX</button>
                     <button type="button" onclick={printEvidenceReport} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">Print/PDF</button>
+                {/if}
+                {#if adminWorkspaceTab === 'attendance'}
+                    <form method="POST" action="?/saveAttendance" use:enhance={() => {
+                        startProcessing('กำลังบันทึกการเข้างาน...');
+                        return async ({ result, update }) => {
+                            stopProcessing();
+                            if (result.type === 'success') {
+                                const savedDates = ((result.data as any)?.savedDates ?? []) as string[];
+                                attendanceExtraDates = Array.from(new Set([...attendanceExtraDates, ...savedDates]));
+                                await update();
+                                attendanceRemovedDates = [];
+                                attendanceDateRenames = [];
+                                showToast('บันทึกแล้ว', (result.data as any)?.message ?? 'บันทึกการเข้างานเรียบร้อยแล้ว', 'success');
+                                isAttendanceDirty = false;
+                            } else {
+                                showToast('บันทึกไม่สำเร็จ', (result as any).data?.message ?? 'กรุณาลองใหม่', 'error');
+                                await update();
+                            }
+                        };
+                    }}>
+                        <input type="hidden" name="attendance_payload" value={attendancePayload}>
+                        <input type="hidden" name="attendance_date_renames" value={attendanceDateRenamesPayload}>
+                        <input type="hidden" name="attendance_deleted_dates" value={attendanceDeletedDatesPayload}>
+                        <button type="submit" disabled={isProcessing || participantRows.length === 0 || attendanceDates.length === 0} class="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-xs text-white font-semibold">บันทึก</button>
+                    </form>
+                    <button type="button" onclick={downloadAttendanceXlsx} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">XLSX</button>
+                    <button type="button" onclick={printAttendanceReport} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">Print/PDF</button>
                 {/if}
             </div>
         </div>
@@ -1378,30 +2139,287 @@
             <div class="{adminWorkspaceTab === 'overview' ? 'grid grid-cols-1 xl:grid-cols-[340px_1fr] gap-0' : 'grid grid-cols-1 gap-0'}">
                 <div class="p-4 border-b xl:border-b-0 xl:border-r border-zinc-200 dark:border-zinc-800 space-y-3">
                     {#if adminWorkspaceTab === 'participants'}
-                    <div class="space-y-2">
-                        <div class="flex items-center justify-between gap-2">
-                            <label for="participant-list-text" class="block text-xs font-semibold text-zinc-400">รายชื่อหลักในฐานข้อมูล</label>
-                            <span class="text-[10px] text-zinc-500">{participantRows.length} รายชื่อ</span>
-                        </div>
+                    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[360px_1fr]">
+                        <div class="space-y-3 rounded-xl border border-zinc-200 bg-zinc-50/70 p-3 dark:border-zinc-800 dark:bg-zinc-950/40">
+                            <div class="flex items-start justify-between gap-2">
+                                <div>
+                                    <div class="text-xs font-bold text-zinc-950 dark:text-white">เครื่องมือรายชื่อ</div>
+                                    <div class="text-[11px] text-zinc-500">เพิ่มรายชื่อเดี่ยว หรือนำเข้า XLSX</div>
+                                </div>
+                                <span class="rounded-full bg-white px-2 py-1 text-[10px] font-semibold text-zinc-500 dark:bg-zinc-900 dark:text-zinc-300">{participantRows.length}</span>
+                            </div>
                         <div class="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950/40 px-3 py-2 text-[11px] text-zinc-500 dark:text-zinc-400">
                             source: {data.participantsMeta?.source ?? '-'} · db rows: {data.participantsMeta?.databaseCount ?? 0} · loaded: {data.participantsMeta?.loadedCount ?? participantRows.length}
                             {#if data.participantsMeta?.error}
                                 <div class="mt-1 text-rose-500 break-words">{data.participantsMeta.error}</div>
                             {/if}
                         </div>
-                        <form method="POST" action="?/importParticipantsXlsx" enctype="multipart/form-data" class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-3 space-y-2" use:enhance={() => participantActionEnhance('นำเข้า XLSX สำเร็จ', 'กำลังนำเข้ารายชื่อจาก XLSX...')}>
+                        <form method="POST" action="?/importParticipantsXlsx" enctype="multipart/form-data" class="rounded-xl border border-zinc-200 bg-white p-3 space-y-2 dark:border-zinc-800 dark:bg-zinc-950/50" use:enhance={() => participantActionEnhance('นำเข้า XLSX สำเร็จ', 'กำลังนำเข้ารายชื่อจาก XLSX...')}>
+                            <div class="text-[11px] font-bold text-zinc-700 dark:text-zinc-300">นำเข้าจาก XLSX</div>
                             <input id="participant-xlsx-input" name="participant_file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="block w-full text-xs text-zinc-600 dark:text-zinc-300 file:mr-3 file:rounded-lg file:border-0 file:bg-brand-600 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white hover:file:bg-brand-700" required>
                             <button type="submit" disabled={isProcessing} class="w-full px-3 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-xs text-white font-semibold">อัปเดตรายชื่อจาก XLSX</button>
                         </form>
-                        <form method="POST" action="?/addParticipant" class="grid grid-cols-[76px_1fr_auto] gap-2" use:enhance={() => participantActionEnhance('เพิ่มรายชื่อสำเร็จ', 'กำลังเพิ่มรายชื่อ...')}>
+                        <form method="POST" action="?/addParticipant" class="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950/50" use:enhance={() => participantActionEnhance('เพิ่มรายชื่อสำเร็จ', 'กำลังเพิ่มรายชื่อ...')}>
+                            <div class="mb-2 text-[11px] font-bold text-zinc-700 dark:text-zinc-300">เพิ่มรายชื่อเดี่ยว</div>
+                            <div class="grid grid-cols-[76px_1fr_auto] gap-2">
                             <input name="order" bind:value={participantAddOrder} inputmode="numeric" placeholder="แทรกที่" title="เว้นว่างเพื่อต่อท้าย หรือกรอกเลขเพื่อแทรกที่ลำดับนั้น" class="bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-900 dark:text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-brand-500">
                             <input name="full_name" bind:value={participantAddName} placeholder="ชื่อ-สกุล" class="bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-900 dark:text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-brand-500" required>
                             <button type="submit" disabled={isProcessing} class="px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs font-semibold text-zinc-700 dark:text-zinc-200 disabled:opacity-50">เพิ่ม</button>
+                            </div>
                         </form>
-                        <form method="POST" action="?/saveParticipants" class="space-y-2" use:enhance={() => participantActionEnhance('บันทึกรายชื่อสำเร็จ', 'กำลังบันทึกรายชื่อ...')}>
+                        </div>
+                        <div class="space-y-3">
+                        <div class="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950/50 overflow-hidden">
+                            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
+                                <div>
+                                    <div class="text-xs font-semibold text-zinc-800 dark:text-zinc-200">รายชื่อ</div>
+                                    <div class="text-[11px] text-zinc-500">แสดง {participantPageStart}-{participantPageEnd} จาก {participantRows.length}</div>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onclick={() => participantPage = Math.max(1, participantPage - 1)}
+                                        disabled={participantPage <= 1}
+                                        class="grid h-8 w-8 place-items-center rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 disabled:opacity-40"
+                                        aria-label="หน้าก่อนหน้า"
+                                    >
+                                        <ChevronLeft class="h-4 w-4" />
+                                    </button>
+                                    <div class="min-w-16 text-center text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+                                        {participantPage}/{participantPageCount}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onclick={() => participantPage = Math.min(participantPageCount, participantPage + 1)}
+                                        disabled={participantPage >= participantPageCount}
+                                        class="grid h-8 w-8 place-items-center rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 disabled:opacity-40"
+                                        aria-label="หน้าถัดไป"
+                                    >
+                                        <ChevronRight class="h-4 w-4" />
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="max-h-[520px] divide-y divide-zinc-200 overflow-y-auto dark:divide-zinc-900">
+                                {#each participantPageRows as participant (`participant-list-${participant.order}-${participant.fullName}`)}
+                                    <div class="grid grid-cols-[56px_1fr] items-center gap-3 px-3 py-2.5 text-xs hover:bg-zinc-50 dark:hover:bg-zinc-900/60">
+                                        <div class="rounded-lg bg-zinc-100 dark:bg-zinc-900 px-2 py-1 text-center font-semibold text-zinc-500 dark:text-zinc-400">
+                                            {participant.order}
+                                        </div>
+                                        <div class="min-w-0 font-medium text-zinc-900 dark:text-zinc-100 truncate">
+                                            {participant.fullName}
+                                        </div>
+                                    </div>
+                                {:else}
+                                    <div class="px-3 py-6 text-center text-xs text-zinc-500">ยังไม่มีรายชื่อ</div>
+                                {/each}
+                            </div>
+                        </div>
+                        </div>
+                        <form method="POST" action="?/saveParticipants" class="xl:col-span-2 rounded-xl border border-zinc-200 bg-white p-3 space-y-2 dark:border-zinc-800 dark:bg-zinc-950/50" use:enhance={() => participantActionEnhance('บันทึกรายชื่อสำเร็จ', 'กำลังบันทึกรายชื่อ...')}>
+                            <div class="flex items-start justify-between gap-3">
+                                <div>
+                                    <label for="participant-list-text" class="block text-xs font-bold text-zinc-950 dark:text-white">แก้รายชื่อแบบรายการยาว</label>
+                                    <div class="text-[11px] text-zinc-500">ใช้เมื่อจำเป็นต้องแก้หลายคนพร้อมกัน แล้วกดบันทึกทั้งหมด</div>
+                                </div>
+                                <span class="rounded-full bg-zinc-100 px-2 py-1 text-[10px] font-semibold text-zinc-500 dark:bg-zinc-900 dark:text-zinc-300">{participantRows.length} รายชื่อ</span>
+                            </div>
                             <textarea id="participant-list-text" name="participant_list" bind:value={participantListText} rows="10" placeholder="วางรายชื่อ 1 บรรทัดต่อ 1 คน เช่น&#10;1 นาย ก&#10;2 นางสาว ข" class="w-full bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl p-3 text-xs text-zinc-900 dark:text-zinc-200 placeholder-zinc-500 dark:placeholder-zinc-600 focus:outline-none focus:border-brand-500"></textarea>
                             <button type="submit" disabled={isProcessing} class="w-full px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-xs text-white font-semibold">บันทึกรายชื่อทั้งหมด</button>
                         </form>
+                    </div>
+                    {/if}
+                    {#if adminWorkspaceTab === 'attendance'}
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
+                            <div class="space-y-3">
+                                <div class="grid grid-cols-3 gap-2 text-xs">
+                                    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-3">
+                                        <div class="text-zinc-500">รายชื่อ</div>
+                                        <div class="text-lg font-black text-zinc-950 dark:text-white">{participantRows.length}</div>
+                                    </div>
+                                    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-3">
+                                        <div class="text-zinc-500">วัน</div>
+                                        <div class="text-lg font-black text-zinc-950 dark:text-white">{attendanceDates.length}</div>
+                                    </div>
+                                    <div class="rounded-xl border border-emerald-200 dark:border-emerald-500/20 bg-white dark:bg-emerald-500/10 p-3">
+                                        <div class="text-emerald-700 dark:text-emerald-300">มา</div>
+                                        <div class="text-lg font-black text-emerald-700 dark:text-emerald-300">{attendanceStats.presentSlots}</div>
+                                    </div>
+                                </div>
+                                <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-3 space-y-3">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <div>
+                                            <div class="text-xs font-semibold text-zinc-700 dark:text-zinc-300">วันที่เช็ค</div>
+                                            <div class="text-[11px] text-zinc-500">กดวันที่เพื่อเลือกจากปฏิทิน</div>
+                                        </div>
+                                        <span class="text-[10px] rounded-lg border border-zinc-200 dark:border-zinc-800 px-2 py-1 text-zinc-500">{attendanceDates.length}</span>
+                                    </div>
+                                    <div class="space-y-2 max-h-72 overflow-y-auto pr-1">
+                                        <button
+                                            type="button"
+                                            onclick={() => selectedAttendanceDate = 'all'}
+                                            class="w-full rounded-xl border px-3 py-2 text-left text-xs font-semibold transition {selectedAttendanceDate === 'all' ? 'border-brand-500 bg-brand-500/10 text-zinc-950 dark:text-white' : 'border-zinc-200 bg-zinc-50 text-zinc-700 hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-950/70 dark:text-zinc-300'}"
+                                        >
+                                            ทั้งหมด
+                                        </button>
+                                        {#each attendanceDates as date (date)}
+                                            <label class="block rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950/70 p-2">
+                                                <span class="mb-1 flex items-center justify-between gap-2 text-[10px] font-semibold uppercase text-zinc-500">
+                                                    <button type="button" onclick={() => selectedAttendanceDate = date} class="text-left {selectedAttendanceDate === date ? 'text-brand-600 dark:text-brand-300' : ''}">วันเช็ค</button>
+                                                    {#if canManageAttendanceDates}
+                                                        <button
+                                                            type="button"
+                                                            onclick={(e) => { e.preventDefault(); removeAttendanceDate(date); }}
+                                                            class="grid h-6 w-6 place-items-center rounded-md border border-rose-200 bg-white text-rose-500 hover:bg-rose-50 dark:border-rose-500/20 dark:bg-zinc-900 dark:hover:bg-rose-500/10"
+                                                            aria-label={`ลบวันที่ ${date}`}
+                                                            title={isSavedAttendanceDate(date) ? 'ลบแบบ soft delete เมื่อกดบันทึก' : 'ลบวันที่ใหม่'}
+                                                        >
+                                                            <Trash2 class="h-3.5 w-3.5" />
+                                                        </button>
+                                                    {/if}
+                                                </span>
+                                                {#if canManageAttendanceDates}
+                                                    <input
+                                                        type="date"
+                                                        value={date}
+                                                        onfocus={openNativeDatePicker}
+                                                        onclick={openNativeDatePicker}
+                                                        onchange={(e) => updateAttendanceDate(date, e.currentTarget.value)}
+                                                        class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-800 rounded-lg px-2.5 py-2 text-xs font-semibold text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-brand-500"
+                                                    >
+                                                {:else}
+                                                    <button
+                                                        type="button"
+                                                        onclick={() => selectedAttendanceDate = date}
+                                                        class="w-full rounded-lg border px-2.5 py-2 text-left text-xs font-semibold transition {selectedAttendanceDate === date ? 'border-brand-500 bg-brand-500/10 text-zinc-950 dark:text-white' : 'border-zinc-300 bg-white text-zinc-900 hover:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100'}"
+                                                    >
+                                                        {date}
+                                                    </button>
+                                                {/if}
+                                            </label>
+                                        {/each}
+                                    </div>
+                                </div>
+                                {#if canManageAttendanceDates}
+                                <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-3 space-y-2">
+                                    <label for="attendance-date" class="text-xs font-semibold text-zinc-500 dark:text-zinc-400">เพิ่มวันที่เช็ค</label>
+                                    <div class="flex gap-2">
+                                        <input id="attendance-date" type="date" bind:value={attendanceDateInput} onfocus={openNativeDatePicker} onclick={openNativeDatePicker} class="min-w-0 flex-1 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-brand-500">
+                                        <button type="button" onclick={addAttendanceDate} class="px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs font-semibold text-zinc-700 dark:text-zinc-200">เพิ่ม</button>
+                                    </div>
+                                    <div class="text-[11px] text-zinc-500">เช็คเป็น 2 ช่องต่อวัน: เช้าและบ่าย</div>
+                                </div>
+                                {/if}
+                            </div>
+                            <div class="space-y-3 min-w-0">
+                                <div class="flex flex-col sm:flex-row gap-2">
+                                    <input bind:value={attendanceSearch} placeholder="ค้นหาลำดับหรือชื่อ" class="flex-1 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-900 dark:text-zinc-200 placeholder-zinc-500 dark:placeholder-zinc-600 focus:outline-none focus:border-brand-500">
+                                    <select bind:value={selectedAttendanceDate} class="bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-900 dark:text-zinc-200">
+                                        <option value="all">ทุกวันที่เช็ค</option>
+                                        {#each attendanceDates as date (date)}
+                                            <option value={date}>{date}</option>
+                                        {/each}
+                                    </select>
+                                    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 px-3 py-2 text-xs text-zinc-500 dark:text-zinc-400">
+                                        ขาด {attendanceStats.missingSlots}/{attendanceStats.totalSlots}
+                                    </div>
+                                </div>
+                                <div class="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950/50">
+                                    <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                        <div>
+                                            <div class="text-xs font-bold text-zinc-950 dark:text-white">รายชื่อผู้เข้างาน</div>
+                                            <div class="text-[11px] text-zinc-500">
+                                                {selectedAttendanceDate === 'all' ? 'เลือกวันที่เดียวเพื่อดูรายชื่อแยกเช้า/บ่าย' : selectedAttendanceSummary.date}
+                                            </div>
+                                        </div>
+                                        {#if selectedAttendanceDate !== 'all'}
+                                            <div class="flex flex-wrap gap-2 text-[11px]">
+                                                <span class="rounded-full bg-emerald-50 px-2 py-1 font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">ครบวัน {selectedAttendanceSummary.fullDayPresent.length}</span>
+                                                <span class="rounded-full bg-sky-50 px-2 py-1 font-semibold text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">เช้า {selectedAttendanceSummary.morningPresent.length}</span>
+                                                <span class="rounded-full bg-indigo-50 px-2 py-1 font-semibold text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300">บ่าย {selectedAttendanceSummary.afternoonPresent.length}</span>
+                                                <span class="rounded-full bg-rose-50 px-2 py-1 font-semibold text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">ยังไม่ครบ {selectedAttendanceSummary.incomplete.length}</span>
+                                            </div>
+                                        {/if}
+                                    </div>
+                                    {#if selectedAttendanceDate !== 'all'}
+                                        <div class="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-3">
+                                            <div class="rounded-lg border border-emerald-100 bg-emerald-50/60 p-2 dark:border-emerald-500/20 dark:bg-emerald-500/10">
+                                                <div class="mb-2 text-[11px] font-bold text-emerald-700 dark:text-emerald-300">มาครบเช้า-บ่าย</div>
+                                                <div class="max-h-32 space-y-1 overflow-y-auto pr-1">
+                                                    {#each selectedAttendanceSummary.fullDayPresent.slice(0, 40) as person (`full-${person.order}-${person.fullName}`)}
+                                                        <div class="truncate rounded-md bg-white px-2 py-1 text-[11px] text-zinc-700 dark:bg-zinc-950/50 dark:text-zinc-200">{person.order}. {person.fullName}</div>
+                                                    {:else}
+                                                        <div class="text-[11px] text-zinc-500">ยังไม่มีรายชื่อ</div>
+                                                    {/each}
+                                                </div>
+                                            </div>
+                                            <div class="rounded-lg border border-sky-100 bg-sky-50/60 p-2 dark:border-sky-500/20 dark:bg-sky-500/10">
+                                                <div class="mb-2 text-[11px] font-bold text-sky-700 dark:text-sky-300">มาเช้า</div>
+                                                <div class="max-h-32 space-y-1 overflow-y-auto pr-1">
+                                                    {#each selectedAttendanceSummary.morningPresent.slice(0, 40) as person (`morning-${person.order}-${person.fullName}`)}
+                                                        <div class="truncate rounded-md bg-white px-2 py-1 text-[11px] text-zinc-700 dark:bg-zinc-950/50 dark:text-zinc-200">{person.order}. {person.fullName}</div>
+                                                    {:else}
+                                                        <div class="text-[11px] text-zinc-500">ยังไม่มีรายชื่อ</div>
+                                                    {/each}
+                                                </div>
+                                            </div>
+                                            <div class="rounded-lg border border-indigo-100 bg-indigo-50/60 p-2 dark:border-indigo-500/20 dark:bg-indigo-500/10">
+                                                <div class="mb-2 text-[11px] font-bold text-indigo-700 dark:text-indigo-300">มาบ่าย</div>
+                                                <div class="max-h-32 space-y-1 overflow-y-auto pr-1">
+                                                    {#each selectedAttendanceSummary.afternoonPresent.slice(0, 40) as person (`afternoon-${person.order}-${person.fullName}`)}
+                                                        <div class="truncate rounded-md bg-white px-2 py-1 text-[11px] text-zinc-700 dark:bg-zinc-950/50 dark:text-zinc-200">{person.order}. {person.fullName}</div>
+                                                    {:else}
+                                                        <div class="text-[11px] text-zinc-500">ยังไม่มีรายชื่อ</div>
+                                                    {/each}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    {/if}
+                                </div>
+                                <div class="overflow-auto rounded-xl border border-zinc-200 dark:border-zinc-800 max-h-[620px]">
+                                    <table class="w-full min-w-max text-xs">
+                                        <thead class="sticky top-0 bg-zinc-100 dark:bg-zinc-950 text-zinc-500 dark:text-zinc-400">
+                                            <tr>
+                                                <th class="text-left p-2 w-16">ลำดับ</th>
+                                                <th class="text-left p-2 min-w-56">ชื่อ-สกุล</th>
+                                                {#each visibleAttendanceDates as date (date)}
+                                                    <th class="text-center p-2 min-w-24">{date}<div class="text-[10px] font-normal">เช้า</div></th>
+                                                    <th class="text-center p-2 min-w-24">{date}<div class="text-[10px] font-normal">บ่าย</div></th>
+                                                {/each}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {#each attendanceRows as row (`attendance-${row.order}-${row.fullName}`)}
+                                                <tr class="border-t border-zinc-200 dark:border-zinc-900">
+                                                    <td class="p-2 text-zinc-500 dark:text-zinc-400">{row.order}</td>
+                                                    <td class="p-2 text-zinc-950 dark:text-zinc-100">{row.fullName}</td>
+                                                    {#each visibleAttendanceDates as date (date)}
+                                                        <td class="p-2 text-center">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={!!attendanceDraft[attendanceKey(row.fullName, date, 'morning')]}
+                                                                onchange={(e) => setAttendance(row.fullName, date, 'morning', e.currentTarget.checked)}
+                                                                class={attendanceCheckboxClass(row.fullName, date, 'morning')}
+                                                                aria-label={`${row.fullName} ${date} เช้า`}
+                                                            >
+                                                        </td>
+                                                        <td class="p-2 text-center">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={!!attendanceDraft[attendanceKey(row.fullName, date, 'afternoon')]}
+                                                                onchange={(e) => setAttendance(row.fullName, date, 'afternoon', e.currentTarget.checked)}
+                                                                class={attendanceCheckboxClass(row.fullName, date, 'afternoon')}
+                                                                aria-label={`${row.fullName} ${date} บ่าย`}
+                                                            >
+                                                        </td>
+                                                    {/each}
+                                                </tr>
+                                            {/each}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     {/if}
                     {#if adminWorkspaceTab === 'overview'}
@@ -2143,7 +3161,7 @@
                                 บทบาท (Role)
                                 <select name="role" bind:value={createRole} class="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-brand-500 mt-1 font-normal">
                                     <option value="staff">Staff (ผู้ใช้งานทั่วไป)</option>
-                                    <option value="admin">Admin (ผู้ดูแลระบบ)</option>
+                                    <option value="admin">ผู้ดูแลระบบ</option>
                                 </select>
                             </label>
                         </div>

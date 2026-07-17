@@ -1,5 +1,5 @@
 import { env } from '$env/dynamic/private';
-import { S3Client, PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 
 /**
  * Public base URL for the R2 bucket (r2.dev subdomain or custom domain).
@@ -33,6 +33,37 @@ export function getR2Client() {
     });
 
     return { client, bucketName };
+}
+
+export type R2ObjectBuffer = {
+    buffer: Buffer;
+    contentType: string;
+};
+
+export async function downloadFromR2(filePath: string, r2BucketBinding?: any): Promise<R2ObjectBuffer | null> {
+    if (!filePath) return null;
+
+    if (r2BucketBinding) {
+        const object = await r2BucketBinding.get(filePath);
+        if (!object) return null;
+        return {
+            buffer: Buffer.from(await object.arrayBuffer()),
+            contentType: object.httpMetadata?.contentType || 'application/octet-stream'
+        };
+    }
+
+    const { client, bucketName } = getR2Client();
+    const result = await client.send(new GetObjectCommand({
+        Bucket: bucketName,
+        Key: filePath
+    }));
+
+    if (!result.Body) return null;
+
+    return {
+        buffer: Buffer.from(await result.Body.transformToByteArray()),
+        contentType: result.ContentType || 'application/octet-stream'
+    };
 }
 
 /**

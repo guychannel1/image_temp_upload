@@ -1,24 +1,19 @@
 import { error } from '@sveltejs/kit';
 import { supabase, isSupabaseConfigured } from '$lib/server/supabase';
 import { getCurrentUser } from '$lib/server/auth';
-import { getR2Client } from '$lib/server/r2';
-import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { downloadFromR2 } from '$lib/server/r2';
 import type { RequestHandler } from './$types';
 
 const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
 
 async function tryDownloadFromR2(storagePath: string) {
 	try {
-		const { client, bucketName } = getR2Client();
-		const result = await client.send(new GetObjectCommand({
-			Bucket: bucketName,
-			Key: storagePath
-		}));
-		if (!result.Body) return null;
-		const body = await result.Body.transformToByteArray();
-		return new Response(body.buffer as ArrayBuffer, {
+		const object = await downloadFromR2(storagePath);
+		if (!object) return null;
+		const body = new Uint8Array(object.buffer);
+		return new Response(body, {
 			headers: {
-				'content-type': result.ContentType || 'application/octet-stream',
+				'content-type': object.contentType,
 				'cache-control': 'private, max-age=300'
 			}
 		});
@@ -37,6 +32,11 @@ export const GET: RequestHandler = async ({ url, fetch, cookies }) => {
 	const storagePath = url.searchParams.get('path');
 	const imageUrl = url.searchParams.get('url');
 
+	if (storagePath) {
+		const r2Response = await tryDownloadFromR2(storagePath);
+		if (r2Response) return r2Response;
+	}
+
 	if (storagePath && isSupabaseConfigured && supabase) {
 		const { data, error: downloadError } = await supabase.storage.from('images').download(storagePath);
 		if (!downloadError && data) {
@@ -47,11 +47,6 @@ export const GET: RequestHandler = async ({ url, fetch, cookies }) => {
 				}
 			});
 		}
-	}
-
-	if (storagePath) {
-		const r2Response = await tryDownloadFromR2(storagePath);
-		if (r2Response) return r2Response;
 	}
 
 	if (!imageUrl) {

@@ -39,6 +39,25 @@ export interface ParticipantRecord {
     created_at: string;
 }
 
+export interface AttendanceRecord {
+    id: string;
+    participant_name: string;
+    attendance_date: string;
+    period: 'morning' | 'afternoon';
+    is_present: boolean;
+    is_deleted?: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface AttendanceSession {
+    id: string;
+    session_date: string;
+    period: 'morning' | 'afternoon';
+    label?: string;
+    is_deleted?: boolean;
+}
+
 // In-memory mock database users
 export let appUsers: AppUser[] = [
     { id: "usr-1", username: "guyssar", role: "admin", password_hash: "d2175b1572d0be3ee4e5e04cf339b6f9946c47d6e4b7615d5bf70618d6cace61" }, // password 'guychannel1' hash
@@ -48,6 +67,10 @@ export let appUsers: AppUser[] = [
 export let appSessions: AppSession[] = [];
 
 export let participants: ParticipantRecord[] = [];
+
+export let attendanceRecords: AttendanceRecord[] = [];
+
+export let attendanceSessions: AttendanceSession[] = [];
 
 export let collections: Collection[] = [
     { id: "col-1", name: "ewe", is_active: true, submission_limit: 500 },
@@ -197,13 +220,47 @@ export function restoreSubmissions(ids: string[]) {
 
 export function replaceParticipants(rows: Array<{ order: number; fullName: string }>) {
     const now = new Date().toISOString();
+    const existingByName = new Map(participants.map((row) => [row.full_name.trim().replace(/\s+/g, ' ').toLowerCase(), row]));
+    const existingByOrder = new Map(participants.map((row) => [row.order, row]));
+    const usedIds = new Set<string>();
+    const nextParticipants = rows.map((row) => {
+        const cleanName = row.fullName.trim().replace(/\s+/g, ' ');
+        const byName = existingByName.get(cleanName.toLowerCase());
+        const byOrder = existingByOrder.get(row.order);
+        const existing = byName && !usedIds.has(byName.id)
+            ? byName
+            : byOrder && !usedIds.has(byOrder.id)
+                ? byOrder
+                : null;
+
+        if (!existing) {
+            return {
+                id: 'participant-' + Date.now() + '-' + row.order,
+                order: row.order,
+                full_name: cleanName,
+                created_at: now
+            };
+        }
+
+        usedIds.add(existing.id);
+        if (existing.full_name !== cleanName) {
+            for (const record of attendanceRecords) {
+                if (record.participant_name === existing.full_name) {
+                    record.participant_name = cleanName;
+                    record.updated_at = now;
+                }
+            }
+        }
+
+        return {
+            ...existing,
+            order: row.order,
+            full_name: cleanName
+        };
+    });
+
     participants.length = 0;
-    participants.push(...rows.map((row) => ({
-        id: 'participant-' + row.order,
-        order: row.order,
-        full_name: row.fullName,
-        created_at: now
-    })));
+    participants.push(...nextParticipants);
 }
 
 export function addParticipant(fullName: string, order?: number) {
@@ -227,7 +284,132 @@ export function addParticipant(fullName: string, order?: number) {
     return record;
 }
 
-export function importBackupData(newCols: any[], newSubs: any[], newParticipants: any[] = []) {
+export function upsertAttendanceRecords(rows: Array<{
+    participant_name: string;
+    attendance_date: string;
+    period: 'morning' | 'afternoon';
+    is_present: boolean;
+}>) {
+    const now = new Date().toISOString();
+    for (const row of rows) {
+        const cleanName = row.participant_name.trim().replace(/\s+/g, ' ');
+        if (!cleanName || !row.attendance_date || !row.period) continue;
+
+        const existing = attendanceRecords.find((record) =>
+            record.participant_name === cleanName
+            && record.attendance_date === row.attendance_date
+            && record.period === row.period
+        );
+
+        if (existing) {
+            existing.is_present = row.is_present;
+            existing.updated_at = now;
+        } else {
+            attendanceRecords.push({
+                id: 'attendance-' + Math.random().toString(36).substring(2, 9),
+                participant_name: cleanName,
+                attendance_date: row.attendance_date,
+                period: row.period,
+                is_present: row.is_present,
+                is_deleted: false,
+                created_at: now,
+                updated_at: now
+            });
+        }
+    }
+
+    return rows.length;
+}
+
+export function ensureAttendanceSessions(dates: string[]) {
+    const cleanDates = Array.from(new Set(dates.filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))));
+    const periods: Array<'morning' | 'afternoon'> = ['morning', 'afternoon'];
+    let changedCount = 0;
+
+    for (const date of cleanDates) {
+        for (const period of periods) {
+            const existing = attendanceSessions.find((session) =>
+                session.session_date === date && session.period === period
+            );
+
+            if (existing) {
+                if (existing.is_deleted) {
+                    existing.is_deleted = false;
+                    changedCount++;
+                }
+            } else {
+                attendanceSessions.push({
+                    id: 'attendance-session-' + Math.random().toString(36).substring(2, 9),
+                    session_date: date,
+                    period,
+                    label: '',
+                    is_deleted: false
+                });
+                changedCount++;
+            }
+        }
+    }
+
+    return changedCount;
+}
+
+export function deleteAttendanceRecordsForDates(participantNames: string[], dates: string[]) {
+    const nameSet = new Set(participantNames.map((name) => name.trim().replace(/\s+/g, ' ')).filter(Boolean));
+    const dateSet = new Set(dates.filter(Boolean));
+    const before = attendanceRecords.length;
+    attendanceRecords = attendanceRecords.filter((record) => {
+        return !(nameSet.has(record.participant_name) && dateSet.has(record.attendance_date));
+    });
+    return before - attendanceRecords.length;
+}
+
+export function renameAttendanceDates(dateRenames: Array<{ from: string; to: string }>) {
+    let changedCount = 0;
+    const now = new Date().toISOString();
+    for (const rename of dateRenames) {
+        for (const session of attendanceSessions) {
+            if (session.session_date !== rename.from) continue;
+            session.session_date = rename.to;
+            session.is_deleted = false;
+            changedCount++;
+        }
+
+        for (const record of attendanceRecords) {
+            if (record.attendance_date !== rename.from) continue;
+            record.attendance_date = rename.to;
+            record.updated_at = now;
+            changedCount++;
+        }
+    }
+    return changedCount;
+}
+
+export function softDeleteAttendanceDates(dates: string[]) {
+    const dateSet = new Set(dates);
+    const now = new Date().toISOString();
+    let changedCount = 0;
+    for (const session of attendanceSessions) {
+        if (!dateSet.has(session.session_date) || session.is_deleted) continue;
+        session.is_deleted = true;
+        changedCount++;
+    }
+
+    for (const record of attendanceRecords) {
+        if (!dateSet.has(record.attendance_date) || record.is_deleted) continue;
+        record.is_deleted = true;
+        record.updated_at = now;
+        changedCount++;
+    }
+    return changedCount;
+}
+
+export function importBackupData(
+    newCols: any[],
+    newSubs: any[],
+    newParticipants: any[] = [],
+    newAttendanceSessions: any[] = [],
+    newAttendanceRecords: any[] = []
+) {
     collections.length = 0;
     collections.push(...newCols.map(c => ({
         id: c.id || ('col-' + Math.random().toString(36).substring(2, 9)),
@@ -259,4 +441,25 @@ export function importBackupData(newCols: any[], newSubs: any[], newParticipants
         created_at: p.created_at || new Date().toISOString()
     })).filter(p => p.full_name));
     participants.sort((a, b) => a.order - b.order);
+
+    attendanceSessions.length = 0;
+    attendanceSessions.push(...newAttendanceSessions.map((session) => ({
+        id: session.id || ('attendance-session-' + Math.random().toString(36).substring(2, 9)),
+        session_date: String(session.session_date ?? '').slice(0, 10),
+        period: (session.period === 'afternoon' ? 'afternoon' : 'morning') as 'morning' | 'afternoon',
+        label: session.label ?? '',
+        is_deleted: session.is_deleted ?? false
+    })).filter((session) => /^\d{4}-\d{2}-\d{2}$/.test(session.session_date)));
+
+    attendanceRecords.length = 0;
+    attendanceRecords.push(...newAttendanceRecords.map((record) => ({
+        id: record.id || ('attendance-' + Math.random().toString(36).substring(2, 9)),
+        participant_name: String(record.participant_name ?? '').trim().replace(/\s+/g, ' '),
+        attendance_date: String(record.attendance_date ?? '').slice(0, 10),
+        period: (record.period === 'afternoon' ? 'afternoon' : 'morning') as 'morning' | 'afternoon',
+        is_present: record.is_present ?? record.checked ?? false,
+        is_deleted: record.is_deleted ?? false,
+        created_at: record.created_at || new Date().toISOString(),
+        updated_at: record.updated_at || new Date().toISOString()
+    })).filter((record) => record.participant_name && /^\d{4}-\d{2}-\d{2}$/.test(record.attendance_date)));
 }
