@@ -945,6 +945,76 @@ async function resolveCollectionByEvidenceType(type: string) {
     return col ? { id: col.id, name: col.name, submission_limit: col.submission_limit ?? 500 } : null;
 }
 
+function isMissingSubmitRpcError(error: any) {
+    const message = String(error?.message ?? error ?? '');
+    const code = String(error?.code ?? '');
+    return code === '42883'
+        || code === 'PGRST202'
+        || /submit_with_quota_guard/i.test(message)
+        || /function .* does not exist/i.test(message);
+}
+
+function stripDuplicateSuffix(value: string) {
+    return value.trim().replace(/\s+\(\d+\)$/, '').toLowerCase();
+}
+
+async function insertSubmissionWithQuotaGuard(input: {
+    collectionId: string;
+    collectionName: string;
+    name: string;
+    groupName: string;
+    filePath: string;
+    fileSize: number;
+    originalSize: number;
+    imgUrl: string;
+    collectionLimit: number;
+    personLimit: number;
+}) {
+    if (!supabase) throw new Error('Supabase is not configured');
+
+    const { data: existingSubmissions, error: existingError } = await supabase
+        .from('submissions')
+        .select('name, is_deleted')
+        .eq('collection_id', input.collectionId);
+    if (existingError) throw existingError;
+
+    const activeSubmissions = (existingSubmissions ?? []).filter((submission: any) => !submission.is_deleted);
+    if (activeSubmissions.length >= input.collectionLimit) {
+        return { success: false, reason: 'quota_exceeded', limit: input.collectionLimit };
+    }
+
+    const baseName = stripDuplicateSuffix(input.name);
+    const personCount = activeSubmissions.filter((submission: any) => stripDuplicateSuffix(String(submission.name ?? '')) === baseName).length;
+    if (personCount >= input.personLimit) {
+        return { success: false, reason: 'person_limit_exceeded', person_limit: input.personLimit };
+    }
+
+    let finalName = input.name;
+    let counter = 1;
+    const existingNames = new Set(activeSubmissions.map((submission: any) => String(submission.name ?? '').toLowerCase()));
+    while (existingNames.has(finalName.toLowerCase())) {
+        finalName = `${input.name} (${counter})`;
+        counter++;
+    }
+
+    const { error: insertError } = await supabase
+        .from('submissions')
+        .insert({
+            collection_id: input.collectionId,
+            collection_name: input.collectionName,
+            name: finalName,
+            group_name: input.groupName || null,
+            file_path: input.filePath,
+            file_size: input.fileSize,
+            original_size: input.originalSize,
+            img_url: input.imgUrl,
+            is_deleted: false
+        });
+    if (insertError) throw insertError;
+
+    return { success: true, final_name: finalName };
+}
+
 export const load: PageServerLoad = async ({ cookies }) => {
     const currentUser = await getCurrentUser(cookies);
     const loggedIn = !!currentUser;
@@ -1850,7 +1920,11 @@ export const actions: Actions = {
                 publicUrl = await uploadToR2(filePath, fileBuffer, mimeType);
             } catch (storageErr: any) {
                 console.error('[submitForm] R2 upload failed:', storageErr);
-                return fail(500, { success: false, message: 'อัปโหลดไฟล์ล้มเหลว กรุณาลองใหม่อีกครั้ง' });
+                const storageMessage = String(storageErr?.message ?? '');
+                if (/Cloudflare R2 credentials are missing/i.test(storageMessage)) {
+                    return fail(503, { success: false, message: 'ระบบอัปโหลดยังไม่ได้ตั้งค่า Cloudflare R2 บน Vercel กรุณาตั้งค่า ENV ของ R2 ให้ครบก่อนใช้งาน' });
+                }
+                return fail(500, { success: false, message: `อัปโหลดไฟล์ล้มเหลว: ${storageMessage || 'กรุณาลองใหม่อีกครั้ง'}` });
             }
 
             // =============================================
@@ -1876,7 +1950,43 @@ export const actions: Actions = {
                     }
                 );
 
-                if (rpcError) throw rpcError;
+                if (rpcError) {
+                    if (isMissingSubmitRpcError(rpcError)) {
+                        console.warn('[submitForm] submit_with_quota_guard missing, using direct insert fallback:', rpcError.message);
+                        const fallbackResult = await insertSubmissionWithQuotaGuard({
+                            collectionId: targetCollectionId,
+                            collectionName: colName,
+                            name: subName,
+                            groupName: subGroup,
+                            filePath,
+                            fileSize,
+                            originalSize: original_size,
+                            imgUrl: publicUrl,
+                            collectionLimit: submissionLimit,
+                            personLimit: 3
+                        });
+
+                        if (!fallbackResult.success) {
+                            await deleteFromR2(filePath);
+                            if (fallbackResult.reason === 'quota_exceeded') {
+                                return fail(429, {
+                                    success: false,
+                                    message: `หัวข้อนี้ถึงขีดจำกัดการรับส่งภาพแล้ว (${fallbackResult.limit ?? submissionLimit} รูป) กรุณาติดต่อผู้ดูแลระบบ`
+                                });
+                            }
+                            if (fallbackResult.reason === 'person_limit_exceeded') {
+                                return fail(429, {
+                                    success: false,
+                                    message: `คุณส่งรูปครบแล้ว (${fallbackResult.person_limit ?? 3} รูปต่อคน) ไม่สามารถส่งเพิ่มได้`
+                                });
+                            }
+                            return fail(400, { success: false, message: 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่' });
+                        }
+
+                        return { success: true, message: 'ส่งรูปภาพเข้าระบบเสร็จสิ้นเรียบร้อย!' };
+                    }
+                    throw rpcError;
+                }
 
                 // RPC returns { success, reason?, limit?, id?, final_name? }
                 if (!rpcResult?.success) {
