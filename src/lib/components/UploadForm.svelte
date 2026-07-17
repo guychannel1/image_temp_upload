@@ -3,7 +3,6 @@
     import { enhance } from '$app/forms';
     import { browser } from '$app/environment';
     import { Upload, X, Eye, Loader, CircleCheck, ShieldAlert, Send, User, Camera, Image, Check } from '@lucide/svelte';
-    import { gsap } from 'gsap';
 
     /**
      * XML comments:
@@ -24,15 +23,6 @@
 
     $effect(() => {
         if (appState.isUploadSuccessModalOpen) {
-            setTimeout(() => {
-                const modalBg = document.getElementById('success-modal-bg');
-                const modalBox = document.getElementById('success-modal-box');
-                if (modalBg && modalBox) {
-                    gsap.fromTo(modalBg, { opacity: 0 }, { opacity: 1, duration: 0.3 });
-                    gsap.fromTo(modalBox, { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: 'back.out(1.7)' });
-                }
-            }, 10);
-
             // Auto close after 1 second
             const timer = setTimeout(() => {
                 closeSuccessModal();
@@ -43,16 +33,7 @@
     });
 
     function closeSuccessModal() {
-        const modalBg = document.getElementById('success-modal-bg');
-        const modalBox = document.getElementById('success-modal-box');
-        if (modalBg && modalBox) {
-            gsap.to(modalBox, { scale: 0.8, opacity: 0, duration: 0.2, ease: 'power2.in' });
-            gsap.to(modalBg, { opacity: 0, duration: 0.25, onComplete: () => {
-                appState.isUploadSuccessModalOpen = false;
-            }});
-        } else {
-            appState.isUploadSuccessModalOpen = false;
-        }
+        appState.isUploadSuccessModalOpen = false;
     }
 
     // Internal form states
@@ -573,8 +554,8 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div id="success-modal-bg" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm px-4 opacity-0" onclick={closeSuccessModal}>
-        <div id="success-modal-box" class="glass max-w-sm w-full rounded-3xl p-6 shadow-2xl relative border border-zinc-800 space-y-6 text-center opacity-0 scale-90" onclick={(e) => e.stopPropagation()}>
+    <div id="success-modal-bg" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm px-4" onclick={closeSuccessModal}>
+        <div id="success-modal-box" class="glass max-w-sm w-full rounded-3xl p-6 shadow-2xl relative border border-zinc-800 space-y-6 text-center" onclick={(e) => e.stopPropagation()}>
             
             <div class="mx-auto w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
                 <CircleCheck class="w-8 h-8" />

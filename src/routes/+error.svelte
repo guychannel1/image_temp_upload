@@ -1,7 +1,5 @@
 <script lang="ts">
     import { page } from '$app/state';
-    import { onMount } from 'svelte';
-    import { gsap } from 'gsap';
     import { ArrowLeft, ShieldAlert } from '@lucide/svelte';
     import Header from '$lib/components/Header.svelte';
 
@@ -10,25 +8,6 @@
         loggedIn: false
     };
 
-    onMount(() => {
-        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        if (reduceMotion) return;
-
-        const ctx = gsap.context(() => {
-            gsap.from('.error-shell', { opacity: 0, y: 18, duration: 0.45, ease: 'power3.out' });
-            gsap.from('.error-item', {
-                opacity: 0,
-                y: 12,
-                duration: 0.38,
-                ease: 'power3.out',
-                stagger: 0.07,
-                delay: 0.12
-            });
-            gsap.fromTo('.error-code-line', { scaleX: 0 }, { scaleX: 1, duration: 0.6, ease: 'power3.out', delay: 0.18 });
-        });
-
-        return () => ctx.revert();
-    });
 </script>
 
 <Header data={fallbackData} />

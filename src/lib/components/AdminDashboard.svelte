@@ -6,7 +6,6 @@
         Power, ChevronLeft, ChevronRight, HardDrive, FolderGit2,
         RefreshCw, Sidebar, RotateCcw, CloudUpload, User, Lock, CheckSquare, Loader2, MoreVertical
     } from '@lucide/svelte';
-    import { gsap } from 'gsap';
     import {
         buildEvidenceReport,
         cleanPersonName,
@@ -158,30 +157,8 @@
         isConfirmModalOpen = true;
     }
 
-    $effect(() => {
-        if (isConfirmModalOpen) {
-            setTimeout(() => {
-                const modalBg = document.getElementById('confirm-modal-bg');
-                const modalBox = document.getElementById('confirm-modal-box');
-                if (modalBg && modalBox) {
-                    gsap.fromTo(modalBg, { opacity: 0 }, { opacity: 1, duration: 0.3 });
-                    gsap.fromTo(modalBox, { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: 'back.out(1.7)' });
-                }
-            }, 10);
-        }
-    });
-
     function closeConfirmModal() {
-        const modalBg = document.getElementById('confirm-modal-bg');
-        const modalBox = document.getElementById('confirm-modal-box');
-        if (modalBg && modalBox) {
-            gsap.to(modalBox, { scale: 0.8, opacity: 0, duration: 0.2, ease: 'power2.in' });
-            gsap.to(modalBg, { opacity: 0, duration: 0.25, onComplete: () => {
-                isConfirmModalOpen = false;
-            }});
-        } else {
-            isConfirmModalOpen = false;
-        }
+        isConfirmModalOpen = false;
     }
 
     // Toasts (passed via showToast from parent or local)
@@ -3047,13 +3024,13 @@
 
 {/if}
 
-<!-- Custom Confirmation Modal (GSAP Animated) -->
+<!-- Custom Confirmation Modal -->
 {#if isConfirmModalOpen}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div id="confirm-modal-bg" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm px-4 opacity-0" onclick={closeConfirmModal}>
-        <div id="confirm-modal-box" class="glass max-w-sm w-full rounded-3xl p-6 shadow-2xl relative border border-zinc-800 space-y-6 text-center opacity-0 scale-90" onclick={(e) => e.stopPropagation()}>
+    <div id="confirm-modal-bg" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm px-4" onclick={closeConfirmModal}>
+        <div id="confirm-modal-box" class="glass max-w-sm w-full rounded-3xl p-6 shadow-2xl relative border border-zinc-800 space-y-6 text-center" onclick={(e) => e.stopPropagation()}>
             <div class="mx-auto w-16 h-16 rounded-full flex items-center justify-center {confirmTheme === 'danger' ? 'bg-rose-500/10 border border-rose-500/20 text-rose-400' : (confirmTheme === 'success' ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' : 'bg-amber-500/10 border border-amber-500/20 text-amber-400')}">
                 {#if confirmTheme === 'danger'}
                     <Trash2 class="w-8 h-8" />
