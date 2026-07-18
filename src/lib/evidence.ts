@@ -38,6 +38,22 @@ export function cleanPersonName(value: string | null | undefined) {
     return normalizeThaiNameCharacters(value ?? '').trim().replace(NUMBERED_SUFFIX_RE, '').replace(/\s+/g, ' ');
 }
 
+export function mergeParticipantLists(incoming: Participant[], existing: Participant[]) {
+    const merged: Participant[] = [];
+    const seen = new Set<string>();
+
+    for (const participant of [...incoming, ...existing]) {
+        const fullName = cleanPersonName(participant.fullName);
+        const key = normalizePersonName(fullName);
+        if (!key || seen.has(key)) continue;
+
+        seen.add(key);
+        merged.push({ order: merged.length + 1, fullName });
+    }
+
+    return merged;
+}
+
 export function parseParticipantList(input: string): Participant[] {
     return input
         .split(/\r?\n/)

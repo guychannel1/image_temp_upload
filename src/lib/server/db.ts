@@ -1,3 +1,5 @@
+import { normalizePersonName } from '$lib/evidence';
+
 export interface Collection {
     id: string;
     name: string;
@@ -220,18 +222,12 @@ export function restoreSubmissions(ids: string[]) {
 
 export function replaceParticipants(rows: Array<{ order: number; fullName: string }>) {
     const now = new Date().toISOString();
-    const existingByName = new Map(participants.map((row) => [row.full_name.trim().replace(/\s+/g, ' ').toLowerCase(), row]));
-    const existingByOrder = new Map(participants.map((row) => [row.order, row]));
+    const existingByName = new Map(participants.map((row) => [normalizePersonName(row.full_name), row]));
     const usedIds = new Set<string>();
     const nextParticipants = rows.map((row) => {
         const cleanName = row.fullName.trim().replace(/\s+/g, ' ');
-        const byName = existingByName.get(cleanName.toLowerCase());
-        const byOrder = existingByOrder.get(row.order);
-        const existing = byName && !usedIds.has(byName.id)
-            ? byName
-            : byOrder && !usedIds.has(byOrder.id)
-                ? byOrder
-                : null;
+        const byName = existingByName.get(normalizePersonName(cleanName));
+        const existing = byName && !usedIds.has(byName.id) ? byName : null;
 
         if (!existing) {
             return {

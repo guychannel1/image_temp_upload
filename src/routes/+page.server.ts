@@ -6,7 +6,7 @@ import { fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
-import { findEvidenceForName, normalizePersonName, parseParticipantList } from '$lib/evidence';
+import { findEvidenceForName, mergeParticipantLists, normalizePersonName, parseParticipantList } from '$lib/evidence';
 
 /**
  * Computes SHA-256 hash of a string.
@@ -290,8 +290,8 @@ async function parseParticipantsXlsx(file: File) {
     return rows;
 }
 
-async function replaceParticipants(rows: Array<{ order: number; fullName: string }>) {
-    const normalizedRows = rows
+async function replaceParticipants(rows: Array<{ order: number; fullName: string }>, options: { preserveMissing?: boolean } = {}) {
+    let normalizedRows = rows
         .map((row, index) => ({
             order: Number.isFinite(row.order) && row.order > 0 ? row.order : index + 1,
             fullName: row.fullName.trim().replace(/\s+/g, ' ')
@@ -317,17 +317,14 @@ async function replaceParticipants(rows: Array<{ order: number; fullName: string
             order: Number(row[orderColumn] ?? index + 1),
             fullName: String(row.full_name ?? '').trim().replace(/\s+/g, ' ')
         }));
+        if (options.preserveMissing) {
+            normalizedRows = mergeParticipantLists(normalizedRows, existingRows);
+        }
         const existingByName = new Map(existingRows.map((row) => [participantNameKey(row.fullName), row]));
-        const existingByOrder = new Map(existingRows.map((row) => [row.order, row]));
         const usedExistingIds = new Set<string>();
         const matchedRows = normalizedRows.map((row) => {
             const byName = existingByName.get(participantNameKey(row.fullName));
-            const byOrder = existingByOrder.get(row.order);
-            const existing = byName && !usedExistingIds.has(byName.id)
-                ? byName
-                : byOrder && !usedExistingIds.has(byOrder.id)
-                    ? byOrder
-                    : null;
+            const existing = byName && !usedExistingIds.has(byName.id) ? byName : null;
             if (existing) usedExistingIds.add(existing.id);
             return { ...row, existing };
         });
@@ -409,6 +406,9 @@ async function replaceParticipants(rows: Array<{ order: number; fullName: string
             if (deleteError) throw deleteError;
         }
     } else {
+        if (options.preserveMissing) {
+            normalizedRows = mergeParticipantLists(normalizedRows, participantRecordsToParticipants(mockDb.participants));
+        }
         mockDb.replaceParticipants(normalizedRows);
     }
 
@@ -1627,8 +1627,8 @@ export const actions: Actions = {
 
         try {
             const rows = await parseParticipantsXlsx(file);
-            const savedRows = await replaceParticipants(rows);
-            return { success: true, message: `นำเข้ารายชื่อ ${savedRows.length} รายการเรียบร้อยแล้ว` };
+            const savedRows = await replaceParticipants(rows, { preserveMissing: true });
+            return { success: true, message: `นำเข้าและรวมรายชื่อเรียบร้อยแล้ว ปัจจุบันมีทั้งหมด ${savedRows.length} รายการ โดยเก็บข้อมูลเช็คชื่อเดิมไว้` };
         } catch (err: any) {
             console.error('[importParticipantsXlsx] error:', err);
             return fail(500, { success: false, message: err.message || 'นำเข้าไฟล์ XLSX ไม่สำเร็จ' });
