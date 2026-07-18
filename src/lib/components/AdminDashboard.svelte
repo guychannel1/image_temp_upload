@@ -1,7 +1,7 @@
 <script lang="ts">
     import { browser } from '$app/environment';
     import { enhance } from '$app/forms';
-    import { goto, invalidateAll } from '$app/navigation';
+    import { replaceState } from '$app/navigation';
     import { 
         Folder, ArrowUp, Home, Search, Trash2, FolderPlus, Download, 
         Power, ChevronLeft, ChevronRight, HardDrive, FolderGit2,
@@ -130,12 +130,7 @@
             } else {
                 url.searchParams.set('view', tab);
             }
-            goto(`${url.pathname}${url.search}`, {
-                replaceState: true,
-                keepFocus: true,
-                noScroll: true,
-                invalidateAll: true
-            });
+            replaceState(`${url.pathname}${url.search}`, {});
         }
     }
 
