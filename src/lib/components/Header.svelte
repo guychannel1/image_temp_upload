@@ -37,6 +37,8 @@
         <nav class="hidden sm:flex items-center gap-1 nav-tabs-wrapper px-1.5 py-1.5 rounded-2xl" aria-label="เมนูหลัก">
             <a
                 href="/"
+                data-sveltekit-preload-data="hover"
+                data-sveltekit-preload-code="hover"
                 onclick={() => appState.activeTab = 'portal'}
                 class="nav-tab {!isDashboardRoute ? 'nav-tab--active' : ''}"
                 aria-current={!isDashboardRoute ? 'page' : undefined}
@@ -46,6 +48,8 @@
             </a>
             <a
                 href="/dashboard"
+                data-sveltekit-preload-data="hover"
+                data-sveltekit-preload-code="hover"
                 onclick={() => appState.activeTab = data.loggedIn ? 'admin' : 'login'}
                 class="nav-tab {isDashboardRoute ? 'nav-tab--active' : ''}"
                 aria-current={isDashboardRoute ? 'page' : undefined}

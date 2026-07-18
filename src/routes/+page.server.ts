@@ -150,7 +150,7 @@ function participantInsertRowsForSchema(
     }));
 }
 
-async function loadParticipants(loggedIn: boolean) {
+export async function _loadParticipants(loggedIn: boolean) {
     const fileParticipants = await loadParticipantsFromListFile();
     if (!loggedIn) {
         return {
@@ -411,6 +411,29 @@ async function replaceParticipants(rows: Array<{ order: number; fullName: string
     return normalizedRows;
 }
 
+async function loadParticipantRowsForImportReview() {
+    if (isSupabaseConfigured && supabase) {
+        const orderColumn = await getParticipantOrderColumn();
+        const { data, error } = await supabase
+            .from('participants')
+            .select(`id, ${orderColumn}, full_name`)
+            .order(orderColumn, { ascending: true })
+            .range(0, 20000);
+        if (error) throw error;
+        return (data ?? []).map((row: any, index: number) => ({
+            id: String(row.id),
+            order: Number(row[orderColumn] ?? index + 1),
+            fullName: String(row.full_name ?? '').trim().replace(/\s+/g, ' ')
+        })).filter((row) => row.fullName.length > 0);
+    }
+
+    return mockDb.participants.map((row: any, index: number) => ({
+        id: String(row.id ?? `mock-${index + 1}`),
+        order: Number(row.order ?? index + 1),
+        fullName: String(row.full_name ?? '').trim().replace(/\s+/g, ' ')
+    })).filter((row) => row.fullName.length > 0);
+}
+
 async function addParticipant(fullName: string, order?: number) {
     const cleanName = fullName.trim().replace(/\s+/g, ' ');
     if (!cleanName) throw new Error('กรุณากรอกชื่อ-สกุล');
@@ -592,7 +615,7 @@ async function ensureParticipantIdsByName(participantNames: string[]) {
     return loadParticipantIdByName(requestedNames);
 }
 
-async function loadAttendanceRecords(loggedIn: boolean) {
+export async function _loadAttendanceRecords(loggedIn: boolean) {
     if (!loggedIn) return [];
 
     if (isSupabaseConfigured && supabase) {
@@ -614,7 +637,7 @@ async function loadAttendanceRecords(loggedIn: boolean) {
     return attendanceRecordsToRows(mockDb.attendanceRecords.filter((record) => !record.is_deleted));
 }
 
-async function loadAttendanceSessions(loggedIn: boolean) {
+export async function _loadAttendanceSessions(loggedIn: boolean) {
     if (!loggedIn) return [];
 
     if (isSupabaseConfigured && supabase) {
@@ -874,8 +897,8 @@ function uniqueAttendanceDatesFromRows(rows: AttendancePayloadRow[]) {
 }
 
 async function loadKnownAttendanceDateSet() {
-    const sessions = await loadAttendanceSessions(true);
-    const records = await loadAttendanceRecords(true);
+    const sessions = await _loadAttendanceSessions(true);
+    const records = await _loadAttendanceRecords(true);
     return new Set([
         ...sessions.map((session) => session.session_date),
         ...records.map((record) => record.attendance_date)
@@ -886,7 +909,7 @@ async function findAttendanceConflicts(rows: AttendancePayloadRow[]) {
     const rowsWithPrevious = rows.filter((row) => typeof row.previous_is_present === 'boolean');
     if (rowsWithPrevious.length === 0) return [];
 
-    const latestRecords = await loadAttendanceRecords(true);
+    const latestRecords = await _loadAttendanceRecords(true);
     const latestByKey = new Map<string, boolean>();
     for (const record of latestRecords) {
         latestByKey.set(`${record.participant_name}|${record.attendance_date}|${record.period}`, !!record.is_present);
@@ -1037,22 +1060,22 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
     const workspaceView = ['overview', 'participants', 'attendance', 'mapping', 'files'].includes(requestedView ?? '')
         ? requestedView
         : 'overview';
-    const loadMode = workspaceView === 'attendance' ? 'attendance' : 'full';
+    const loadMode = workspaceView === 'attendance' ? 'attendance' : 'workspace';
     const attendanceOnly = loadMode === 'attendance';
     // The global XLSX export is available from every dashboard workspace and combines
     // participants, attendance, and evidence in one sheet. Keep all three datasets
     // available after login so its contents never depend on the currently selected tab.
-    const needsParticipants = loggedIn || ['overview', 'participants', 'attendance', 'mapping'].includes(workspaceView ?? '');
-    const needsAttendance = loggedIn;
-    const needsSubmissionData = loggedIn;
+    const needsParticipants = loggedIn && ['overview', 'participants', 'attendance', 'mapping'].includes(workspaceView ?? '');
+    const needsAttendance = loggedIn && workspaceView === 'attendance';
+    const needsSubmissionData = loggedIn && workspaceView !== 'attendance';
     const emptyParticipantLoad = {
         participants: [],
         meta: { source: 'not-loaded', databaseCount: 0, loadedCount: 0, error: '' }
     };
     const [participantLoad, attendanceRecords, attendanceSessions] = await Promise.all([
-        needsParticipants ? loadParticipants(loggedIn) : Promise.resolve(emptyParticipantLoad),
-        needsAttendance ? loadAttendanceRecords(loggedIn) : Promise.resolve([]),
-        needsAttendance ? loadAttendanceSessions(loggedIn) : Promise.resolve([])
+        needsParticipants ? _loadParticipants(loggedIn) : Promise.resolve(emptyParticipantLoad),
+        needsAttendance ? _loadAttendanceRecords(loggedIn) : Promise.resolve([]),
+        needsAttendance ? _loadAttendanceSessions(loggedIn) : Promise.resolve([])
     ]);
     const participants = participantLoad.participants;
 
@@ -1508,7 +1531,7 @@ export const actions: Actions = {
     // Permanent Delete Submissions (only allowed for guyssar)
     deleteSubmissionsPermanently: async ({ request, cookies }) => {
         const currentUser = await getCurrentUser(cookies);
-        if (currentUser?.username?.toLowerCase() !== 'guyssar') {
+        if (currentUser?.role !== 'admin') {
             return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการลบรูปภาพถาวร' });
         }
 
@@ -1619,7 +1642,7 @@ export const actions: Actions = {
         }
     },
 
-    importParticipantsXlsx: async ({ request, cookies }) => {
+    previewParticipantsXlsx: async ({ request, cookies }) => {
         const currentUser = await getCurrentUser(cookies);
         if (!canViewSubmissions(currentUser?.role || '')) {
             return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนอัปเดตรายชื่อ' });
@@ -1633,11 +1656,40 @@ export const actions: Actions = {
 
         try {
             const rows = await parseParticipantsXlsx(file);
-            const savedRows = await replaceParticipants(rows, { preserveMissing: true });
-            return { success: true, message: `นำเข้าและรวมรายชื่อเรียบร้อยแล้ว ปัจจุบันมีทั้งหมด ${savedRows.length} รายการ โดยเก็บข้อมูลเช็คชื่อเดิมไว้` };
+            const existingRows = await loadParticipantRowsForImportReview();
+            return {
+                success: true,
+                message: `อ่านไฟล์สำเร็จ ${rows.length} รายการ กรุณาตรวจสอบก่อนบันทึก`,
+                preview: { incomingRows: rows, existingRows }
+            };
         } catch (err: any) {
             console.error('[importParticipantsXlsx] error:', err);
             return fail(500, { success: false, message: err.message || 'นำเข้าไฟล์ XLSX ไม่สำเร็จ' });
+        }
+    },
+
+    applyParticipantImportPreview: async ({ request, cookies }) => {
+        const currentUser = await getCurrentUser(cookies);
+        if (!canViewSubmissions(currentUser?.role || '')) {
+            return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนอัปเดตรายชื่อ' });
+        }
+
+        try {
+            const formData = await request.formData();
+            const rawRows = String(formData.get('participant_rows') ?? '');
+            const rows = JSON.parse(rawRows);
+            if (!Array.isArray(rows) || rows.length === 0 || rows.length > 20000) {
+                return fail(400, { success: false, message: 'ข้อมูล Preview ไม่ถูกต้องหรือมีจำนวนมากเกินไป' });
+            }
+            const cleanRows = rows.map((row: any, index: number) => ({
+                order: Number(row.order) || index + 1,
+                fullName: String(row.fullName ?? '').trim().replace(/\s+/g, ' ')
+            })).filter((row: any) => row.fullName.length > 0);
+            const savedRows = await replaceParticipants(cleanRows, { preserveMissing: true });
+            return { success: true, message: `ยืนยันการอัปเดตรายชื่อแล้ว ปัจจุบันมีทั้งหมด ${savedRows.length} รายการ` };
+        } catch (err: any) {
+            console.error('[applyParticipantImportPreview] error:', err);
+            return fail(500, { success: false, message: err.message || 'อัปเดตรายชื่อไม่สำเร็จ' });
         }
     },
 
@@ -1702,7 +1754,7 @@ export const actions: Actions = {
             if (conflicts.length > 0) {
                 return fail(409, { success: false, message: `ข้อมูลเช็คชื่อเปลี่ยนไปแล้ว ${conflicts.length} ช่อง กรุณารีโหลดและตรวจอีกครั้ง` });
             }
-            const canManageAttendanceDates = currentUser?.username === 'guyssar';
+            const canManageAttendanceDates = currentUser?.role === 'admin';
             if (!canManageAttendanceDates) {
                 const knownDates = await loadKnownAttendanceDateSet();
                 const newDates = [
@@ -2351,7 +2403,7 @@ export const actions: Actions = {
 
     createUser: async ({ request, cookies }) => {
         const currentUser = await getCurrentUser(cookies);
-        if (currentUser?.username?.toLowerCase() !== 'guyssar') {
+        if (currentUser?.role !== 'admin') {
             return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการสร้างผู้ใช้ (เฉพาะ guyssar เท่านั้น)' });
         }
 
@@ -2420,7 +2472,7 @@ export const actions: Actions = {
         }
 
         // Only guyssar can change anyone's password, other users can only change their own password
-        if (currentUser.username?.toLowerCase() !== 'guyssar' && currentUser.username?.toLowerCase() !== targetUsername?.toLowerCase()) {
+        if (currentUser.role !== 'admin' && currentUser.username?.toLowerCase() !== targetUsername?.toLowerCase()) {
             return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการเปลี่ยนรหัสผ่านของผู้อื่น' });
         }
 
@@ -2453,7 +2505,7 @@ export const actions: Actions = {
 
     deleteUser: async ({ request, cookies }) => {
         const currentUser = await getCurrentUser(cookies);
-        if (currentUser?.username?.toLowerCase() !== 'guyssar') {
+        if (currentUser?.role !== 'admin') {
             return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการลบผู้ใช้ (เฉพาะ guyssar เท่านั้น)' });
         }
 

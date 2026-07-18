@@ -58,6 +58,12 @@
     let retryCount = $state(0);
     const MAX_RETRIES = 2;
 
+    // A drag can leave the upload zone when text or a file is dragged outside
+    // the browser. Always clear the visual drag state at the window boundary.
+    function resetDragState() {
+        isDragging = false;
+    }
+
     // Error codes that should NOT be retried (user/quota errors)
     const NON_RETRYABLE_MESSAGES = ['ถึงขีดจำกัด', 'ไม่พบหัวข้อ', 'ปิดรับ', 'ไม่มีหัวข้อ', 'ส่งรูปครบ'];
 
@@ -172,6 +178,8 @@
         return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
     }
 </script>
+
+<svelte:window ondragend={resetDragState} ondrop={resetDragState} onmouseup={resetDragState} onblur={resetDragState} />
 
 <section class="max-w-2xl mx-auto w-full space-y-8 animate-fade-in py-6 sm:py-10">
     <!-- Header title -->
