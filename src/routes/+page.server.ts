@@ -1029,10 +1029,19 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
         : 'overview';
     const loadMode = workspaceView === 'attendance' ? 'attendance' : 'full';
     const attendanceOnly = loadMode === 'attendance';
-    const participantLoad = await loadParticipants(loggedIn);
+    const needsParticipants = ['overview', 'participants', 'attendance', 'mapping'].includes(workspaceView ?? '');
+    const needsAttendance = workspaceView === 'attendance';
+    const needsSubmissionData = ['overview', 'mapping', 'files'].includes(workspaceView ?? '');
+    const emptyParticipantLoad = {
+        participants: [],
+        meta: { source: 'not-loaded', databaseCount: 0, loadedCount: 0, error: '' }
+    };
+    const [participantLoad, attendanceRecords, attendanceSessions] = await Promise.all([
+        needsParticipants ? loadParticipants(loggedIn) : Promise.resolve(emptyParticipantLoad),
+        needsAttendance ? loadAttendanceRecords(loggedIn) : Promise.resolve([]),
+        needsAttendance ? loadAttendanceSessions(loggedIn) : Promise.resolve([])
+    ]);
     const participants = participantLoad.participants;
-    const attendanceRecords = await loadAttendanceRecords(loggedIn);
-    const attendanceSessions = await loadAttendanceSessions(loggedIn);
 
     let collectionsList: any[] = [];
     let submissionsList: any[] = [];
@@ -1078,14 +1087,28 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
         }
     }
 
-    if (!attendanceOnly && isSupabaseConfigured && supabase) {
+    if (needsSubmissionData && isSupabaseConfigured && supabase) {
         try {
-            // Load collections from Supabase
-            const { data: cols, error: colsErr } = await supabase
+            const collectionsPromise = supabase
                 .from('collections')
-                .select('*')
+                .select('id, name, is_active, submission_limit')
                 .order('created_at', { ascending: true });
-            
+            const submissionsPromise = workspaceView === 'files'
+                ? supabase
+                    .from('submissions')
+                    .select('id, collection_id, collection_name, name, group_name, file_path, file_size, original_size, img_url, is_deleted')
+                    .order('created_at', { ascending: true })
+                : supabase
+                    .from('submissions')
+                    .select('id, collection_id, collection_name, name, group_name, file_size, is_deleted')
+                    .eq('is_deleted', false)
+                    .order('created_at', { ascending: true });
+            const [collectionsResponse, submissionsResponse] = await Promise.all([
+                collectionsPromise,
+                submissionsPromise
+            ]);
+            const { data: cols, error: colsErr } = collectionsResponse;
+
             if (!colsErr && cols) {
                 collectionsList = cols.map(c => ({
                     id: c.id,
@@ -1095,13 +1118,10 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
                 }));
             }
 
-            // Load submissions from Supabase
-            const { data: subs, error: subsErr } = await supabase
-                .from('submissions')
-                .select('*')
-                .order('created_at', { ascending: true });
+            const subs = (submissionsResponse.data ?? []) as any[];
+            const subsErr = submissionsResponse.error;
 
-            if (!subsErr && subs) {
+            if (!subsErr) {
                 collectionStats = subs.reduce((stats, s) => {
                     if (!s.is_deleted && s.collection_id) {
                         const current = stats[s.collection_id] ?? { count: 0, totalFileSize: 0 };
@@ -1151,7 +1171,7 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
                 ? (userRole === 'admin' ? mockDb.submissions : mockDb.submissions.filter(s => !s.is_deleted))
                 : [];
         }
-    } else if (!attendanceOnly) {
+    } else if (needsSubmissionData) {
         // Fallback to local mock db
         collectionsList = mockDb.collections;
         const allMapped = mockDb.submissions.map(s => ({
@@ -1180,7 +1200,7 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
     }
 
     // If user is admin (guyssar), add virtual collection for deleted items
-    if (userRole === 'admin' && !attendanceOnly) {
+    if (userRole === 'admin' && workspaceView === 'files') {
         collectionsList.push({
             id: 'deleted-drive',
             name: 'deleted',

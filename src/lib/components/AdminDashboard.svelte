@@ -927,6 +927,61 @@
         attendanceRemovedDates.filter((date) => isSavedAttendanceDate(date))
     ));
 
+    function commitAttendanceSave(savedDates: string[]) {
+        const changedRows = JSON.parse(attendancePayload) as Array<{
+            participant_name: string;
+            attendance_date: string;
+            period: 'morning' | 'afternoon';
+            is_present: boolean;
+        }>;
+        const renamedDates = new Map(attendanceDateRenames.map((rename) => [rename.from, rename.to]));
+        const deletedDates = new Set(attendanceRemovedDates);
+        const recordsByKey = new Map<string, any>();
+
+        for (const record of data.attendanceRecords ?? []) {
+            const originalDate = String(record.attendance_date ?? '').slice(0, 10);
+            const attendanceDate = renamedDates.get(originalDate) ?? originalDate;
+            if (deletedDates.has(attendanceDate) || (deletedDates.has(originalDate) && !renamedDates.has(originalDate))) continue;
+            const period = record.period === 'afternoon' ? 'afternoon' : 'morning';
+            recordsByKey.set(attendanceKey(record.participant_name, attendanceDate, period), {
+                ...record,
+                attendance_date: attendanceDate,
+                period
+            });
+        }
+
+        for (const row of changedRows) {
+            const key = attendanceKey(row.participant_name, row.attendance_date, row.period);
+            recordsByKey.set(key, {
+                ...recordsByKey.get(key),
+                participant_name: row.participant_name,
+                attendance_date: row.attendance_date,
+                period: row.period,
+                is_present: row.is_present
+            });
+        }
+        data.attendanceRecords = Array.from(recordsByKey.values());
+
+        const sessionsByKey = new Map<string, any>();
+        for (const session of data.attendanceSessions ?? []) {
+            const originalDate = String(session.session_date ?? '').slice(0, 10);
+            const sessionDate = renamedDates.get(originalDate) ?? originalDate;
+            if (deletedDates.has(sessionDate) || (deletedDates.has(originalDate) && !renamedDates.has(originalDate))) continue;
+            const period = session.period === 'afternoon' ? 'afternoon' : 'morning';
+            sessionsByKey.set(`${sessionDate}|${period}`, { ...session, session_date: sessionDate, period });
+        }
+        for (const date of savedDates) {
+            for (const period of ['morning', 'afternoon'] as const) {
+                const key = `${date}|${period}`;
+                if (!sessionsByKey.has(key)) sessionsByKey.set(key, { session_date: date, period });
+            }
+        }
+        data.attendanceSessions = Array.from(sessionsByKey.values());
+        attendanceExtraDates = [];
+        attendanceRemovedDates = [];
+        attendanceDateRenames = [];
+    }
+
     const attendanceStats = $derived.by(() => {
         const totalSlots = participantRows.length * attendanceDates.length * 2;
         const presentSlots = participantRows.reduce((count: number, participant: any) => {
@@ -2172,22 +2227,18 @@
                     <button type="button" onclick={printEvidenceReport} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">Print/PDF</button>
                 {/if}
                 {#if adminWorkspaceTab === 'attendance'}
-                    <form method="POST" action="?/saveAttendance" use:enhance={() => {
+                    <form method="POST" action="?view=attendance&/saveAttendance" use:enhance={() => {
                         startProcessing('กำลังบันทึกการเข้างาน...');
-                        return async ({ result, update }) => {
+                        return async ({ result }) => {
                             stopProcessing();
                             if (result.type === 'success') {
                                 const savedDates = ((result.data as any)?.savedDates ?? []) as string[];
-                                attendanceExtraDates = Array.from(new Set([...attendanceExtraDates, ...savedDates]));
-                                await update();
-                                attendanceRemovedDates = [];
-                                attendanceDateRenames = [];
+                                commitAttendanceSave(savedDates);
                                 showToast('บันทึกแล้ว', (result.data as any)?.message ?? 'บันทึกการเข้างานเรียบร้อยแล้ว', 'success');
                                 isAttendanceDirty = false;
                                 clearAttendanceLocalDraft();
                             } else {
                                 showToast('บันทึกไม่สำเร็จ', (result as any).data?.message ?? 'กรุณาลองใหม่', 'error');
-                                await update();
                             }
                         };
                     }}>
