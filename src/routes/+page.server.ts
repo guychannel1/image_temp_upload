@@ -1023,7 +1023,11 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
     const loggedIn = !!currentUser;
     const username = currentUser?.username || '';
     const userRole = currentUser?.role || '';
-    const loadMode = url.searchParams.get('view') === 'attendance' ? 'attendance' : 'full';
+    const requestedView = url.searchParams.get('view');
+    const workspaceView = ['overview', 'participants', 'attendance', 'mapping', 'files'].includes(requestedView ?? '')
+        ? requestedView
+        : 'overview';
+    const loadMode = workspaceView === 'attendance' ? 'attendance' : 'full';
     const attendanceOnly = loadMode === 'attendance';
     const participantLoad = await loadParticipants(loggedIn);
     const participants = participantLoad.participants;
@@ -1197,6 +1201,7 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
         usersList,
         isSupabaseLive: isSupabaseConfigured,
         loadMode,
+        workspaceView,
         participants,
         participantsMeta: participantLoad.meta,
         attendanceRecords,

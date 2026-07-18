@@ -86,7 +86,8 @@
     let createRole = $state<'admin' | 'staff'>('staff');
     let changePasswordUsername = $state('');
     let changePasswordNewPassword = $state('');
-    let adminWorkspaceTab = $state<'overview' | 'participants' | 'attendance' | 'mapping' | 'files'>(data.loadMode === 'attendance' ? 'attendance' : 'overview');
+    type WorkspaceTab = 'overview' | 'participants' | 'attendance' | 'mapping' | 'files';
+    let adminWorkspaceTab = $state<WorkspaceTab>(data.workspaceView ?? (data.loadMode === 'attendance' ? 'attendance' : 'overview'));
     const initialParticipantText = (data.participants ?? []).map((p: any) => `${p.order}\t${p.fullName}`).join('\n');
     let participantSourceText = $state(initialParticipantText);
     let participantListText = $state(initialParticipantText);
@@ -119,17 +120,22 @@
         { id: 'files', label: 'ไฟล์ทั้งหมด', description: 'เปิดดูและจัดการรูป', countLabel: 'ไฟล์' }
     ] as const;
 
-    function switchWorkspaceTab(tab: typeof adminWorkspaceTab) {
+    function switchWorkspaceTab(tab: WorkspaceTab) {
         adminWorkspaceTab = tab;
         if (tab !== 'files') isEvidencePanelOpen = true;
         if (browser) {
             const url = new URL(window.location.href);
-            if (tab === 'attendance') {
-                url.searchParams.set('view', 'attendance');
-            } else {
+            if (tab === 'overview') {
                 url.searchParams.delete('view');
+            } else {
+                url.searchParams.set('view', tab);
             }
-            goto(`${url.pathname}${url.search}`, { replaceState: true, keepFocus: true, noScroll: true });
+            goto(`${url.pathname}${url.search}`, {
+                replaceState: true,
+                keepFocus: true,
+                noScroll: true,
+                invalidateAll: true
+            });
         }
     }
 
