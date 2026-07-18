@@ -495,6 +495,20 @@ async function hasAttendanceParticipantIdColumn() {
     return false;
 }
 
+async function hasAttendanceSessionIdColumn() {
+    if (!supabase) return false;
+
+    const { error } = await supabase
+        .from('attendance_records')
+        .select('id, session_id')
+        .limit(1);
+
+    if (!error) return true;
+    const message = String(error?.message ?? '');
+    if (/session_id/i.test(message) && /schema cache|column|could not find/i.test(message)) return false;
+    return false;
+}
+
 async function hasAttendanceSessionIsDeletedColumn() {
     if (!supabase) return false;
 
@@ -2127,7 +2141,7 @@ export const actions: Actions = {
         }
     },
 
-    importBackupJson: async ({ request, cookies }) => {
+    importBackupJson: async ({ request, cookies, platform }) => {
         const currentUser = await getCurrentUser(cookies);
         if (!currentUser) {
             return fail(401, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
@@ -2147,39 +2161,36 @@ export const actions: Actions = {
                 return fail(400, { success: false, message: 'โครงสร้างไฟล์ JSON ไม่ถูกต้อง' });
             }
 
+            const { restoreBackupImages, validateFullBackupManifest } = await import('$lib/server/backup');
+            validateFullBackupManifest(backupData);
+
             const collections = backupData.collections || [];
             const submissions = backupData.submissions || [];
             const participants = backupData.participants || [];
             const attendanceSessions = backupData.attendance_sessions || backupData.attendanceSessions || [];
             const attendanceRecords = backupData.attendance_records || backupData.attendanceRecords || [];
+            const appUsers = backupData.app_users || [];
 
-            if (!Array.isArray(collections) || !Array.isArray(submissions) || !Array.isArray(participants) || !Array.isArray(attendanceSessions) || !Array.isArray(attendanceRecords)) {
+            if (!Array.isArray(collections) || !Array.isArray(submissions) || !Array.isArray(participants) || !Array.isArray(attendanceSessions) || !Array.isArray(attendanceRecords) || !Array.isArray(appUsers)) {
                 return fail(400, { success: false, message: 'โครงสร้าง collections, submissions หรือ participants ในไฟล์ JSON ไม่ถูกต้อง' });
             }
 
+            // Verify checksums and restore every binary image before destructive DB work.
+            const r2Bucket = (platform as any)?.env?.R2_BUCKET || (platform as any)?.env?.R2 || (platform as any)?.env?.images;
+            const restoredImages = await restoreBackupImages(backupData, r2Bucket);
+
             if (isSupabaseConfigured && supabase) {
-                const { error: attendanceRecordsDeleteErr } = await supabase
-                    .from('attendance_records')
-                    .delete()
-                    .not('id', 'is', null);
-                if (attendanceRecordsDeleteErr) {
-                    console.error('[importBackupJson] Attendance records delete error:', attendanceRecordsDeleteErr);
-                    throw new Error(`ไม่สามารถล้างข้อมูลเช็คชื่อเดิมได้: ${attendanceRecordsDeleteErr.message}`);
+                // Full restore: clear dependent tables in FK-safe order only after all
+                // backup files have been verified and restored successfully.
+                for (const table of ['attendance_records', 'submissions', 'attendance_sessions', 'participants', 'collections']) {
+                    const { error } = await supabase.from(table).delete().not('id', 'is', null);
+                    if (error) throw new Error(`ไม่สามารถล้างตาราง ${table}: ${error.message}`);
                 }
 
                 // 1. นำเข้า Participants
                 if (participants.length > 0) {
                     const orderColumn = await getParticipantOrderColumn();
                     const includeLegacyOrder = await hasLegacyParticipantOrderColumn();
-                    const { error: participantDeleteErr } = await supabase
-                        .from('participants')
-                        .delete()
-                        .not('id', 'is', null);
-                    if (participantDeleteErr) {
-                        console.error('[importBackupJson] Participants delete error:', participantDeleteErr);
-                        throw new Error(`ไม่สามารถล้างรายชื่อเดิมได้: ${participantDeleteErr.message}`);
-                    }
-
                     const { error: participantErr } = await supabase
                         .from('participants')
                         .insert(
@@ -2236,7 +2247,7 @@ export const actions: Actions = {
                                 file_path: s.file_path,
                                 file_size: s.file_size,
                                 original_size: s.original_size || s.file_size,
-                                img_url: s.img_url,
+                                img_url: restoredImages.urlsBySubmissionId[s.id] || s.img_url,
                                 is_deleted: s.is_deleted ?? false,
                                 created_at: s.created_at || new Date().toISOString()
                             }))
@@ -2251,15 +2262,6 @@ export const actions: Actions = {
                 // 4. นำเข้า Attendance Sessions
                 if (attendanceSessions.length > 0) {
                     const hasSessionIsDeleted = await hasAttendanceSessionIsDeletedColumn();
-                    const { error: attendanceSessionsDeleteErr } = await supabase
-                        .from('attendance_sessions')
-                        .delete()
-                        .not('id', 'is', null);
-                    if (attendanceSessionsDeleteErr) {
-                        console.error('[importBackupJson] Attendance sessions delete error:', attendanceSessionsDeleteErr);
-                        throw new Error(`ไม่สามารถล้างวันที่เช็คเดิมได้: ${attendanceSessionsDeleteErr.message}`);
-                    }
-
                     const { error: attendanceSessionsErr } = await supabase
                         .from('attendance_sessions')
                         .insert(attendanceSessions.map((session) => ({
@@ -2278,11 +2280,13 @@ export const actions: Actions = {
                 // 5. นำเข้า Attendance Records
                 if (attendanceRecords.length > 0) {
                     const hasParticipantId = await hasAttendanceParticipantIdColumn();
+                    const hasSessionId = await hasAttendanceSessionIdColumn();
                     const { error: attendanceRecordsErr } = await supabase
                         .from('attendance_records')
                         .insert(attendanceRecords.map((record) => ({
                             id: record.id,
                             ...(hasParticipantId ? { participant_id: record.participant_id ?? null } : {}),
+                            ...(hasSessionId ? { session_id: record.session_id ?? null } : {}),
                             participant_name: String(record.participant_name ?? '').trim().replace(/\s+/g, ' '),
                             attendance_date: String(record.attendance_date ?? '').slice(0, 10),
                             period: record.period === 'afternoon' ? 'afternoon' : 'morning',
@@ -2296,6 +2300,40 @@ export const actions: Actions = {
                         throw new Error(`ไม่สามารถกู้คืนข้อมูลเช็คชื่อได้: ${attendanceRecordsErr.message}`);
                     }
                 }
+
+                // Sessions are intentionally not restored. Expire them before replacing
+                // accounts so stale authentication tokens cannot survive a restore.
+                const { error: sessionsDeleteError } = await supabase
+                    .from('app_sessions')
+                    .delete()
+                    .not('token_hash', 'is', null);
+                if (sessionsDeleteError) throw new Error(`ไม่สามารถล้าง session เดิมได้: ${sessionsDeleteError.message}`);
+
+                const { error: usersInsertError } = await supabase
+                    .from('app_users')
+                    .upsert(appUsers.map((user: any) => ({
+                        username: user.username,
+                        role: user.role,
+                        password_hash: user.password_hash,
+                        created_at: user.created_at || new Date().toISOString()
+                    })), { onConflict: 'username' });
+                if (usersInsertError) throw new Error(`ไม่สามารถกู้คืนบัญชีผู้ใช้ได้: ${usersInsertError.message}`);
+
+                const backupUsernames = new Set(appUsers.map((user: any) => user.username));
+                const { data: currentUsers, error: currentUsersError } = await supabase
+                    .from('app_users')
+                    .select('id, username');
+                if (currentUsersError) throw new Error(`ไม่สามารถตรวจบัญชีผู้ใช้หลังการกู้คืนได้: ${currentUsersError.message}`);
+                const extraUserIds = (currentUsers ?? [])
+                    .filter((user: any) => !backupUsernames.has(user.username))
+                    .map((user: any) => user.id);
+                if (extraUserIds.length > 0) {
+                    const { error: extraUsersDeleteError } = await supabase
+                        .from('app_users')
+                        .delete()
+                        .in('id', extraUserIds);
+                    if (extraUsersDeleteError) throw new Error(`ไม่สามารถลบบัญชีที่ไม่อยู่ใน Backup ได้: ${extraUsersDeleteError.message}`);
+                }
             } else {
                 // Fallback to mock DB
                 mockDb.importBackupData(collections, submissions, participants, attendanceSessions, attendanceRecords);
@@ -2303,7 +2341,7 @@ export const actions: Actions = {
 
             return { 
                 success: true, 
-                message: `นำเข้าข้อมูลสำรองสำเร็จเรียบร้อย! (รายชื่อ: ${participants.length} รายการ, หัวข้อส่งงาน: ${collections.length} รายการ, รูปภาพส่งงาน: ${submissions.length} รูป, วันที่เช็ค: ${attendanceSessions.length} รายการ, เช็คชื่อ: ${attendanceRecords.length} รายการ)` 
+                message: `กู้คืน Full Backup สำเร็จ! (บัญชี: ${appUsers.length}, รายชื่อ: ${participants.length}, หัวข้อ: ${collections.length}, รูปที่ตรวจ checksum แล้ว: ${restoredImages.filesCount}, วันที่เช็ค: ${attendanceSessions.length}, เช็คชื่อ: ${attendanceRecords.length}) กรุณาเข้าสู่ระบบใหม่`
             };
         } catch (err: any) {
             console.error('[importBackupJson] Restore error:', err);
