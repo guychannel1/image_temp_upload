@@ -17,8 +17,17 @@ export type EvidenceStatusRow = Participant & {
 
 const NUMBERED_SUFFIX_RE = /\s*\(\d+\)\s*$/;
 
+function normalizeThaiNameCharacters(value: string) {
+    return value
+        // Unicode normalization reorders Thai combining marks such as ้ + ุ
+        // into their canonical order (ุ + ้).
+        .normalize('NFC')
+        // Two SARA E characters are commonly typed to imitate SARA AE.
+        .replace(/\u0E40\u0E40/g, '\u0E41');
+}
+
 export function normalizePersonName(value: string | null | undefined) {
-    return (value ?? '')
+    return normalizeThaiNameCharacters(value ?? '')
         .trim()
         .replace(NUMBERED_SUFFIX_RE, '')
         .replace(/\s+/g, ' ')
@@ -26,7 +35,7 @@ export function normalizePersonName(value: string | null | undefined) {
 }
 
 export function cleanPersonName(value: string | null | undefined) {
-    return (value ?? '').trim().replace(NUMBERED_SUFFIX_RE, '').replace(/\s+/g, ' ');
+    return normalizeThaiNameCharacters(value ?? '').trim().replace(NUMBERED_SUFFIX_RE, '').replace(/\s+/g, ' ');
 }
 
 export function parseParticipantList(input: string): Participant[] {
