@@ -2186,7 +2186,7 @@
                             <div class="text-sm font-bold">{tab.label}</div>
                             <div class="mt-0.5 text-[11px] leading-snug {adminWorkspaceTab === tab.id ? 'text-zinc-600' : 'text-zinc-500 dark:text-zinc-400'}">{tab.description}</div>
                         </div>
-                        <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold {adminWorkspaceTab === tab.id ? 'bg-zinc-950 text-white dark:bg-zinc-950 dark:text-white' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300'}">{count}</span>
+                       <!-- <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold {adminWorkspaceTab === tab.id ? 'bg-zinc-950 text-white dark:bg-zinc-950 dark:text-white' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300'}">{count}</span>-->
                     </div>
                 </button>
             {/each}
