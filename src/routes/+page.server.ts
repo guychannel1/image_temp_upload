@@ -1092,16 +1092,12 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
                 .from('collections')
                 .select('id, name, is_active, submission_limit')
                 .order('created_at', { ascending: true });
-            const submissionsPromise = workspaceView === 'files'
-                ? supabase
-                    .from('submissions')
-                    .select('id, collection_id, collection_name, name, group_name, file_path, file_size, original_size, img_url, is_deleted')
-                    .order('created_at', { ascending: true })
-                : supabase
-                    .from('submissions')
-                    .select('id, collection_id, collection_name, name, group_name, file_size, is_deleted')
-                    .eq('is_deleted', false)
-                    .order('created_at', { ascending: true });
+            // Dashboard tabs use shallow URL updates, so file metadata must be present
+            // even when the initial tab is not the file explorer.
+            const submissionsPromise = supabase
+                .from('submissions')
+                .select('id, collection_id, collection_name, name, group_name, file_path, file_size, original_size, img_url, is_deleted')
+                .order('created_at', { ascending: true });
             const [collectionsResponse, submissionsResponse] = await Promise.all([
                 collectionsPromise,
                 submissionsPromise
