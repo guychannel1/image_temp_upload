@@ -908,7 +908,10 @@ async function saveAttendanceRecords(rows: AttendancePayloadRow[]) {
             const { error: upsertError } = await supabase
                 .from('attendance_records')
                 .upsert(rowChunk.map((row) => ({
-                    ...row,
+                    participant_name: row.participant_name,
+                    attendance_date: row.attendance_date,
+                    period: row.period,
+                    is_present: row.is_present,
                     ...(hasParticipantId ? { participant_id: participantIdByName.get(row.participant_name) ?? null } : {}),
                     is_deleted: false,
                     updated_at: now
@@ -1015,11 +1018,13 @@ async function insertSubmissionWithQuotaGuard(input: {
     return { success: true, final_name: finalName };
 }
 
-export const load: PageServerLoad = async ({ cookies }) => {
+export const load: PageServerLoad = async ({ cookies, url }) => {
     const currentUser = await getCurrentUser(cookies);
     const loggedIn = !!currentUser;
     const username = currentUser?.username || '';
     const userRole = currentUser?.role || '';
+    const loadMode = url.searchParams.get('view') === 'attendance' ? 'attendance' : 'full';
+    const attendanceOnly = loadMode === 'attendance';
     const participantLoad = await loadParticipants(loggedIn);
     const participants = participantLoad.participants;
     const attendanceRecords = await loadAttendanceRecords(loggedIn);
@@ -1050,7 +1055,7 @@ export const load: PageServerLoad = async ({ cookies }) => {
         };
     }
 
-    if (loggedIn && userRole === 'admin') {
+    if (loggedIn && userRole === 'admin' && !attendanceOnly) {
         if (isSupabaseConfigured && supabase) {
             try {
                 const { data: dbUsers } = await supabase
@@ -1069,7 +1074,7 @@ export const load: PageServerLoad = async ({ cookies }) => {
         }
     }
 
-    if (isSupabaseConfigured && supabase) {
+    if (!attendanceOnly && isSupabaseConfigured && supabase) {
         try {
             // Load collections from Supabase
             const { data: cols, error: colsErr } = await supabase
@@ -1142,7 +1147,7 @@ export const load: PageServerLoad = async ({ cookies }) => {
                 ? (userRole === 'admin' ? mockDb.submissions : mockDb.submissions.filter(s => !s.is_deleted))
                 : [];
         }
-    } else {
+    } else if (!attendanceOnly) {
         // Fallback to local mock db
         collectionsList = mockDb.collections;
         const allMapped = mockDb.submissions.map(s => ({
@@ -1171,7 +1176,7 @@ export const load: PageServerLoad = async ({ cookies }) => {
     }
 
     // If user is admin (guyssar), add virtual collection for deleted items
-    if (userRole === 'admin') {
+    if (userRole === 'admin' && !attendanceOnly) {
         collectionsList.push({
             id: 'deleted-drive',
             name: 'deleted',
@@ -1191,6 +1196,7 @@ export const load: PageServerLoad = async ({ cookies }) => {
         users: usersList,
         usersList,
         isSupabaseLive: isSupabaseConfigured,
+        loadMode,
         participants,
         participantsMeta: participantLoad.meta,
         attendanceRecords,

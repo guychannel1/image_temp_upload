@@ -1,6 +1,7 @@
 <script lang="ts">
+    import { browser } from '$app/environment';
     import { enhance } from '$app/forms';
-    import { invalidateAll } from '$app/navigation';
+    import { goto, invalidateAll } from '$app/navigation';
     import { 
         Folder, ArrowUp, Home, Search, Trash2, FolderPlus, Download, 
         Power, ChevronLeft, ChevronRight, HardDrive, FolderGit2,
@@ -85,7 +86,7 @@
     let createRole = $state<'admin' | 'staff'>('staff');
     let changePasswordUsername = $state('');
     let changePasswordNewPassword = $state('');
-    let adminWorkspaceTab = $state<'overview' | 'participants' | 'attendance' | 'mapping' | 'files'>('overview');
+    let adminWorkspaceTab = $state<'overview' | 'participants' | 'attendance' | 'mapping' | 'files'>(data.loadMode === 'attendance' ? 'attendance' : 'overview');
     const initialParticipantText = (data.participants ?? []).map((p: any) => `${p.order}\t${p.fullName}`).join('\n');
     let participantSourceText = $state(initialParticipantText);
     let participantListText = $state(initialParticipantText);
@@ -102,6 +103,7 @@
     let selectedAttendanceDate = $state('all');
     let attendanceDraft = $state<Record<string, boolean>>({});
     let isAttendanceDirty = $state(false);
+    let isAttendanceLocalRestored = $state(false);
     let isEvidencePanelOpen = $state(true);
     let mappingDrafts = $state<Record<string, { name: string; evidence_type: 'eve' | 'cer' }>>({});
     let editingSubmission = $state<any | null>(null);
@@ -120,6 +122,15 @@
     function switchWorkspaceTab(tab: typeof adminWorkspaceTab) {
         adminWorkspaceTab = tab;
         if (tab !== 'files') isEvidencePanelOpen = true;
+        if (browser) {
+            const url = new URL(window.location.href);
+            if (tab === 'attendance') {
+                url.searchParams.set('view', 'attendance');
+            } else {
+                url.searchParams.delete('view');
+            }
+            goto(`${url.pathname}${url.search}`, { replaceState: true, keepFocus: true, noScroll: true });
+        }
     }
 
     function workspaceCount(tab: typeof adminWorkspaceTab) {
@@ -748,6 +759,63 @@
         return saved;
     });
 
+    function attendanceLocalStorageKey() {
+        return `attendance-draft:${data.username || 'anonymous'}`;
+    }
+
+    function saveAttendanceLocalDraft(
+        draft = attendanceDraft,
+        extraDates = attendanceExtraDates,
+        removedDates = attendanceRemovedDates,
+        renames = attendanceDateRenames
+    ) {
+        if (!browser) return;
+        localStorage.setItem(attendanceLocalStorageKey(), JSON.stringify({
+            draft,
+            extraDates,
+            removedDates,
+            renames,
+            selectedDate: selectedAttendanceDate,
+            updatedAt: new Date().toISOString()
+        }));
+    }
+
+    function clearAttendanceLocalDraft() {
+        if (!browser) return;
+        localStorage.removeItem(attendanceLocalStorageKey());
+    }
+
+    function restoreAttendanceLocalDraft() {
+        if (!browser || isAttendanceLocalRestored) return false;
+        isAttendanceLocalRestored = true;
+
+        const raw = localStorage.getItem(attendanceLocalStorageKey());
+        if (!raw) return false;
+
+        try {
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return false;
+
+            attendanceDraft = {
+                ...savedAttendanceDraft,
+                ...(parsed.draft && typeof parsed.draft === 'object' ? parsed.draft : {})
+            };
+            attendanceExtraDates = Array.isArray(parsed.extraDates) ? parsed.extraDates.filter((date: unknown) => typeof date === 'string') : [];
+            attendanceRemovedDates = Array.isArray(parsed.removedDates) ? parsed.removedDates.filter((date: unknown) => typeof date === 'string') : [];
+            attendanceDateRenames = Array.isArray(parsed.renames)
+                ? parsed.renames.filter((rename: any) => typeof rename?.from === 'string' && typeof rename?.to === 'string')
+                : [];
+            if (typeof parsed.selectedDate === 'string') selectedAttendanceDate = parsed.selectedDate;
+            isAttendanceDirty = true;
+            showToast('กู้คืนร่างเช็คชื่อ', 'โหลดข้อมูลที่ติ๊กค้างไว้จากเครื่องนี้แล้ว', 'success');
+            return true;
+        } catch (err) {
+            console.warn('Failed to restore attendance draft:', err);
+            clearAttendanceLocalDraft();
+            return false;
+        }
+    }
+
     function attendanceCheckboxClass(name: string, date: string, period: 'morning' | 'afternoon') {
         const key = attendanceKey(name, date, period);
         const isChecked = !!attendanceDraft[key];
@@ -783,7 +851,8 @@
     });
 
     $effect(() => {
-        if (isAttendanceDirty) return;
+        if (restoreAttendanceLocalDraft()) return;
+        if (isAttendanceDirty || !isAttendanceLocalRestored) return;
         attendanceDraft = { ...savedAttendanceDraft };
     });
 
@@ -895,10 +964,12 @@
 
     function setAttendance(name: string, date: string, period: 'morning' | 'afternoon', value: boolean) {
         isAttendanceDirty = true;
-        attendanceDraft = {
+        const nextDraft = {
             ...attendanceDraft,
             [attendanceKey(name, date, period)]: value
         };
+        attendanceDraft = nextDraft;
+        saveAttendanceLocalDraft(nextDraft);
     }
 
     function addAttendanceDate() {
@@ -908,7 +979,9 @@
         }
         if (!attendanceDateInput || attendanceDates.includes(attendanceDateInput)) return;
         isAttendanceDirty = true;
-        attendanceExtraDates = [...attendanceExtraDates, attendanceDateInput];
+        const nextExtraDates = [...attendanceExtraDates, attendanceDateInput];
+        attendanceExtraDates = nextExtraDates;
+        saveAttendanceLocalDraft(attendanceDraft, nextExtraDates);
     }
 
     function removeAttendanceDate(date: string) {
@@ -917,9 +990,12 @@
             return;
         }
         isAttendanceDirty = true;
-        attendanceExtraDates = attendanceExtraDates.filter((extraDate) => extraDate !== date);
+        const nextExtraDates = attendanceExtraDates.filter((extraDate) => extraDate !== date);
+        attendanceExtraDates = nextExtraDates;
+        let nextRemovedDates = attendanceRemovedDates;
         if (isSavedAttendanceDate(date)) {
-            attendanceRemovedDates = Array.from(new Set([...attendanceRemovedDates, date]));
+            nextRemovedDates = Array.from(new Set([...attendanceRemovedDates, date]));
+            attendanceRemovedDates = nextRemovedDates;
         }
 
         const nextDraft: Record<string, boolean> = {};
@@ -929,7 +1005,9 @@
             nextDraft[key] = value;
         }
         attendanceDraft = nextDraft;
-        attendanceDateRenames = attendanceDateRenames.filter((rename) => rename.from !== date && rename.to !== date);
+        const nextRenames = attendanceDateRenames.filter((rename) => rename.from !== date && rename.to !== date);
+        attendanceDateRenames = nextRenames;
+        saveAttendanceLocalDraft(nextDraft, nextExtraDates, nextRemovedDates, nextRenames);
     }
 
     function replaceAttendanceDraftDate(oldDate: string, newDate: string) {
@@ -945,6 +1023,7 @@
             nextDraft[nextKey] = nextDraft[nextKey] || value;
         }
         attendanceDraft = nextDraft;
+        saveAttendanceLocalDraft(nextDraft);
     }
 
     function updateAttendanceDate(oldDate: string, newDate: string) {
@@ -962,12 +1041,16 @@
         const sourceDate = existingRename?.from ?? oldDate;
         isAttendanceDirty = true;
         replaceAttendanceDraftDate(oldDate, newDate);
-        attendanceRemovedDates = Array.from(new Set([...attendanceRemovedDates, sourceDate, oldDate])).filter((date) => date !== newDate);
-        attendanceExtraDates = Array.from(new Set(attendanceExtraDates.map((date) => date === oldDate ? newDate : date).concat(newDate))).filter((date) => date !== oldDate);
-        attendanceDateRenames = [
+        const nextRemovedDates = Array.from(new Set([...attendanceRemovedDates, sourceDate, oldDate])).filter((date) => date !== newDate);
+        const nextExtraDates = Array.from(new Set(attendanceExtraDates.map((date) => date === oldDate ? newDate : date).concat(newDate))).filter((date) => date !== oldDate);
+        const nextRenames = [
             ...attendanceDateRenames.filter((rename) => rename.from !== sourceDate && rename.to !== oldDate && rename.from !== oldDate),
             { from: sourceDate, to: newDate }
         ];
+        attendanceRemovedDates = nextRemovedDates;
+        attendanceExtraDates = nextExtraDates;
+        attendanceDateRenames = nextRenames;
+        saveAttendanceLocalDraft(attendanceDraft, nextExtraDates, nextRemovedDates, nextRenames);
     }
 
     function openNativeDatePicker(event: Event) {
@@ -2095,6 +2178,7 @@
                                 attendanceDateRenames = [];
                                 showToast('บันทึกแล้ว', (result.data as any)?.message ?? 'บันทึกการเข้างานเรียบร้อยแล้ว', 'success');
                                 isAttendanceDirty = false;
+                                clearAttendanceLocalDraft();
                             } else {
                                 showToast('บันทึกไม่สำเร็จ', (result as any).data?.message ?? 'กรุณาลองใหม่', 'error');
                                 await update();
