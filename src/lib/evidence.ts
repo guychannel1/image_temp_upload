@@ -19,6 +19,8 @@ const NUMBERED_SUFFIX_RE = /\s*\(\d+\)\s*$/;
 
 function normalizeThaiNameCharacters(value: string) {
     return value
+        // Remove invisible formatting characters that can be embedded in copied names.
+        .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
         // Unicode normalization reorders Thai combining marks such as ้ + ุ
         // into their canonical order (ุ + ้).
         .normalize('NFC')
@@ -52,6 +54,39 @@ export function mergeParticipantLists(incoming: Participant[], existing: Partici
     }
 
     return merged;
+}
+
+export function planParticipantUpdates<T extends Participant & { id: string }>(
+    desired: Participant[],
+    existing: T[],
+    options: { matchRenamesByOrder?: boolean } = {}
+) {
+    const existingByName = new Map(existing.map((row) => [normalizePersonName(row.fullName), row]));
+    const existingByOrder = new Map(existing.map((row) => [row.order, row]));
+    const desiredNameKeys = new Set(desired.map((row) => normalizePersonName(row.fullName)));
+    const usedExistingIds = new Set<string>();
+    const rows = desired.map((row) => {
+        const byName = existingByName.get(normalizePersonName(row.fullName));
+        const byOrder = existingByOrder.get(row.order);
+        const orderMatchIsRename = options.matchRenamesByOrder
+            && byOrder
+            && !desiredNameKeys.has(normalizePersonName(byOrder.fullName));
+        const current = byName && !usedExistingIds.has(byName.id)
+            ? byName
+            : orderMatchIsRename && !usedExistingIds.has(byOrder.id)
+                ? byOrder
+                : null;
+        if (current) usedExistingIds.add(current.id);
+        return { ...row, existing: current };
+    });
+
+    return {
+        rows,
+        changedRows: rows.filter((row) => row.existing && (row.existing.order !== row.order || row.existing.fullName !== row.fullName)),
+        unchangedRows: rows.filter((row) => row.existing && row.existing.order === row.order && row.existing.fullName === row.fullName),
+        newRows: rows.filter((row) => !row.existing),
+        removedRows: existing.filter((row) => !usedExistingIds.has(row.id))
+    };
 }
 
 export function parseParticipantList(input: string): Participant[] {

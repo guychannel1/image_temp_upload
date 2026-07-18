@@ -6,7 +6,7 @@ import { fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
-import { findEvidenceForName, mergeParticipantLists, normalizePersonName, parseParticipantList } from '$lib/evidence';
+import { findEvidenceForName, mergeParticipantLists, normalizePersonName, parseParticipantList, planParticipantUpdates } from '$lib/evidence';
 
 /**
  * Computes SHA-256 hash of a string.
@@ -148,10 +148,6 @@ function participantInsertRowsForSchema(
         ...(includeLegacyOrder ? { order: row.order } : {}),
         full_name: row.fullName
     }));
-}
-
-function participantNameKey(name: string) {
-    return normalizePersonName(name);
 }
 
 async function loadParticipants(loggedIn: boolean) {
@@ -320,17 +316,33 @@ async function replaceParticipants(rows: Array<{ order: number; fullName: string
         if (options.preserveMissing) {
             normalizedRows = mergeParticipantLists(normalizedRows, existingRows);
         }
-        const existingByName = new Map(existingRows.map((row) => [participantNameKey(row.fullName), row]));
-        const usedExistingIds = new Set<string>();
-        const matchedRows = normalizedRows.map((row) => {
-            const byName = existingByName.get(participantNameKey(row.fullName));
-            const existing = byName && !usedExistingIds.has(byName.id) ? byName : null;
-            if (existing) usedExistingIds.add(existing.id);
-            return { ...row, existing };
+        const updatePlan = planParticipantUpdates(normalizedRows, existingRows, {
+            matchRenamesByOrder: !options.preserveMissing
         });
+        const removedIds = updatePlan.removedRows.map((row) => row.id);
 
-        for (const [index, existing] of existingRows.entries()) {
-            const tempOrder = -(index + 1);
+        if (removedIds.length > 0) {
+            const hasParticipantId = await hasAttendanceParticipantIdColumn();
+            if (hasParticipantId) {
+                for (const idChunk of chunkArray(removedIds, ATTENDANCE_DELETE_ID_CHUNK_SIZE)) {
+                    const { error } = await supabase
+                        .from('attendance_records')
+                        .update({ participant_id: null, updated_at: new Date().toISOString() })
+                        .in('participant_id', idChunk);
+                    if (error && !isAttendanceSchemaError(error)) throw error;
+                }
+            }
+
+            const { error: deleteError } = await supabase
+                .from('participants')
+                .delete()
+                .in('id', removedIds);
+            if (deleteError) throw deleteError;
+        }
+
+        const minimumExistingOrder = existingRows.reduce((minimum, row) => Math.min(minimum, row.order), 0);
+        for (const [index, row] of updatePlan.changedRows.entries()) {
+            const tempOrder = minimumExistingOrder - index - 1;
             const { error } = await supabase
                 .from('participants')
                 .update({
@@ -338,11 +350,11 @@ async function replaceParticipants(rows: Array<{ order: number; fullName: string
                     ...(includeLegacyOrder ? { order: tempOrder } : {}),
                     updated_at: new Date().toISOString()
                 })
-                .eq('id', existing.id);
+                .eq('id', row.existing!.id);
             if (error) throw error;
         }
 
-        for (const row of matchedRows) {
+        for (const row of [...updatePlan.changedRows, ...updatePlan.newRows]) {
             const now = new Date().toISOString();
             if (!row.existing) {
                 const { error } = await supabase
@@ -370,6 +382,12 @@ async function replaceParticipants(rows: Array<{ order: number; fullName: string
                     .update({ participant_name: row.fullName, updated_at: now })
                     .eq('participant_name', row.existing.fullName);
                 if (attendanceByNameError && !isAttendanceSchemaError(attendanceByNameError)) throw attendanceByNameError;
+
+                const { error: submissionsByNameError } = await supabase
+                    .from('submissions')
+                    .update({ name: row.fullName })
+                    .eq('name', row.existing.fullName);
+                if (submissionsByNameError) throw submissionsByNameError;
             }
 
             const { error } = await supabase
@@ -382,28 +400,6 @@ async function replaceParticipants(rows: Array<{ order: number; fullName: string
                 })
                 .eq('id', row.existing.id);
             if (error) throw error;
-        }
-
-        const removedIds = existingRows
-            .filter((row) => !usedExistingIds.has(row.id))
-            .map((row) => row.id);
-        if (removedIds.length > 0) {
-            const hasParticipantId = await hasAttendanceParticipantIdColumn();
-            if (hasParticipantId) {
-                for (const idChunk of chunkArray(removedIds, ATTENDANCE_DELETE_ID_CHUNK_SIZE)) {
-                    const { error } = await supabase
-                        .from('attendance_records')
-                        .update({ participant_id: null, updated_at: new Date().toISOString() })
-                        .in('participant_id', idChunk);
-                    if (error && !isAttendanceSchemaError(error)) throw error;
-                }
-            }
-
-            const { error: deleteError } = await supabase
-                .from('participants')
-                .delete()
-                .in('id', removedIds);
-            if (deleteError) throw deleteError;
         }
     } else {
         if (options.preserveMissing) {

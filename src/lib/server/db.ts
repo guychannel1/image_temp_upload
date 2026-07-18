@@ -246,6 +246,9 @@ export function replaceParticipants(rows: Array<{ order: number; fullName: strin
                     record.updated_at = now;
                 }
             }
+            for (const submission of submissions) {
+                if (submission.name === existing.full_name) submission.name = cleanName;
+            }
         }
 
         return {
