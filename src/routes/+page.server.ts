@@ -1029,9 +1029,12 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
         : 'overview';
     const loadMode = workspaceView === 'attendance' ? 'attendance' : 'full';
     const attendanceOnly = loadMode === 'attendance';
-    const needsParticipants = ['overview', 'participants', 'attendance', 'mapping'].includes(workspaceView ?? '');
-    const needsAttendance = workspaceView === 'attendance';
-    const needsSubmissionData = ['overview', 'mapping', 'files'].includes(workspaceView ?? '');
+    // The global XLSX export is available from every dashboard workspace and combines
+    // participants, attendance, and evidence in one sheet. Keep all three datasets
+    // available after login so its contents never depend on the currently selected tab.
+    const needsParticipants = loggedIn || ['overview', 'participants', 'attendance', 'mapping'].includes(workspaceView ?? '');
+    const needsAttendance = loggedIn;
+    const needsSubmissionData = loggedIn;
     const emptyParticipantLoad = {
         participants: [],
         meta: { source: 'not-loaded', databaseCount: 0, loadedCount: 0, error: '' }

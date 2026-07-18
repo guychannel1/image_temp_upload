@@ -2063,7 +2063,7 @@
                 </button>
                 <button onclick={downloadAllXlsx} disabled={isProcessing} class="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50 disabled:pointer-events-none dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/15">
                     <Download class="w-4 h-4" />
-                    <span>Download all XLSX</span>
+                    <span>Download all XLSX (เช็คชื่อ + EWE + CER)</span>
                 </button>
             </div>
         </div>
