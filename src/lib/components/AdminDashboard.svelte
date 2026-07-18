@@ -2564,8 +2564,14 @@
                     {/if}
 
                     {#if adminWorkspaceTab === 'mapping'}
-                        <div class="space-y-2 pt-2">
-                            <div class="text-xs font-semibold text-amber-300">ไฟล์ที่ต้องตรวจ mapping ({unmatchedEvidenceFiles.length})</div>
+                        <div class="space-y-4 pt-2">
+                            <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                                <div>
+                                    <div class="text-sm font-bold text-zinc-950 dark:text-white">รายชื่อที่ต้องตรวจสอบ</div>
+                                    <div class="text-[11px] text-zinc-500 dark:text-zinc-400">เทียบชื่อจากไฟล์กับรายชื่อหลัก แล้วระบุประเภท EWE หรือ CER</div>
+                                </div>
+                                <span class="w-fit rounded-full border border-amber-300/60 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300">{unmatchedEvidenceFiles.length} รายการ</span>
+                            </div>
                             {#if unmatchedEvidenceFiles.length === 0}
                                 <div class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-xs text-emerald-300">ไม่มีไฟล์ที่ต้องตรวจ mapping ตอนนี้</div>
                             {:else}
@@ -2589,8 +2595,13 @@
                                     <button type="button" onclick={printUnmatchedEvidenceFiles} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 text-xs font-semibold">PDF รายชื่อไม่เจอ</button>
                                 </div>
                             </form>
-                            <div class="space-y-2 max-h-80 overflow-y-auto pr-1">
-                                {#each unmatchedEvidenceFiles as file (file.id)}
+                            <datalist id="mapping-participant-names">
+                                {#each participantRows as participant}
+                                    <option value={participant.fullName}>{participant.order}</option>
+                                {/each}
+                            </datalist>
+                            <div class="grid max-h-[65vh] grid-cols-1 gap-3 overflow-y-auto pr-1 sm:grid-cols-2 2xl:grid-cols-3">
+                                {#each unmatchedEvidenceFiles as file, fileIndex (file.id)}
                                     {@const draft = getMappingDraft(file)}
                                     <form method="POST" action="?/updateSubmissionMapping" use:enhance={() => {
                                         startProcessing('กำลังอัปเดต mapping...');
@@ -2604,15 +2615,34 @@
                                             }
                                             await update();
                                         };
-                                    }} class="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-2 space-y-2">
+                                    }} class="group relative overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:border-amber-300 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950/60 dark:hover:border-amber-500/40">
                                         <input type="hidden" name="id" value={file.id}>
-                                        <input name="name" value={draft.name} oninput={(e) => updateMappingDraft(file, { name: e.currentTarget.value })} class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-zinc-200">
-                                        <div class="flex gap-2">
-                                            <select name="evidence_type" value={draft.evidence_type} onchange={(e) => updateMappingDraft(file, { evidence_type: e.currentTarget.value as 'eve' | 'cer' })} class="flex-1 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-zinc-200">
+                                        <div class="flex items-start gap-3 border-b border-zinc-100 bg-zinc-50/80 p-3 dark:border-zinc-800 dark:bg-zinc-900/50">
+                                            <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-xs font-black text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">{fileIndex + 1}</div>
+                                            <div class="min-w-0 flex-1">
+                                                <div class="truncate text-sm font-bold text-zinc-950 dark:text-white" title={cleanPersonName(file.name)}>{cleanPersonName(file.name) || 'ไม่พบชื่อในไฟล์'}</div>
+                                                <div class="mt-1 flex flex-wrap gap-1.5 text-[10px] text-zinc-500 dark:text-zinc-400">
+                                                    <span class="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 dark:border-zinc-700 dark:bg-zinc-950">{file.collection_name || 'ไม่ทราบโฟลเดอร์'}</span>
+                                                    {#if file.group_name}<span class="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 dark:border-zinc-700 dark:bg-zinc-950">{file.group_name}</span>{/if}
+                                                </div>
+                                            </div>
+                                            <span class="rounded-md px-2 py-1 text-[10px] font-black uppercase {draft.evidence_type === 'cer' ? 'bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'}">{draft.evidence_type}</span>
+                                        </div>
+                                        <div class="space-y-3 p-3">
+                                            <label class="block">
+                                                <span class="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">ชื่อที่จับคู่</span>
+                                                <input name="name" list="mapping-participant-names" value={draft.name} oninput={(e) => updateMappingDraft(file, { name: e.currentTarget.value })} class="w-full rounded-lg border border-zinc-300 bg-white px-2.5 py-2 text-xs font-semibold text-zinc-900 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-400/15 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200" autocomplete="off">
+                                            </label>
+                                            <div class="flex gap-2">
+                                            <label class="min-w-0 flex-1">
+                                                <span class="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">ประเภทไฟล์</span>
+                                                <select name="evidence_type" value={draft.evidence_type} onchange={(e) => updateMappingDraft(file, { evidence_type: e.currentTarget.value as 'eve' | 'cer' })} class="w-full rounded-lg border border-zinc-300 bg-white px-2.5 py-2 text-xs font-semibold text-zinc-900 outline-none transition focus:border-amber-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
                                                 <option value="eve">eve</option>
                                                 <option value="cer">cer</option>
                                             </select>
-                                            <button type="submit" class="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-semibold">บันทึก</button>
+                                            </label>
+                                            <button type="submit" class="mt-[18px] rounded-lg bg-brand-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500/30">บันทึก</button>
+                                            </div>
                                         </div>
                                     </form>
                                 {/each}
