@@ -246,12 +246,22 @@
         return index;
     });
 
+    const explorerCollections = $derived.by(() => {
+        if (data.userRole !== 'admin' || !data.submissions.some((submission: any) => submission.is_deleted) || data.collections.some((col: any) => col.id === 'deleted-drive')) {
+            return data.collections;
+        }
+        return [
+            ...data.collections,
+            { id: 'deleted-drive', name: 'deleted', is_active: false, submission_limit: 999999 }
+        ];
+    });
+
     let explorerItems = $derived.by(() => {
         const searchLower = searchExplorerQuery.trim().toLowerCase();
 
         if (!searchLower) {
             if (currentExplorerPath.length === 0) {
-                return data.collections.map((col: any) => {
+                return explorerCollections.map((col: any) => {
                     const subCount = submissionsByCollection.get(col.id)?.length ?? 0;
                     return {
                         type: 'folder',
@@ -264,7 +274,7 @@
                 });
             } else if (currentExplorerPath.length === 1) {
                 const colName = currentExplorerPath[0];
-                const colObj = data.collections.find((c: any) => c.name === colName);
+                const colObj = explorerCollections.find((c: any) => c.name === colName);
                 if (!colObj) return [];
                 if (colObj.id === 'deleted-drive') {
                     return (submissionsByCollection.get('deleted-drive') ?? [])
@@ -293,9 +303,9 @@
 
         // Search mode
         const items: any[] = [];
-        let targetCols = data.collections;
+        let targetCols = explorerCollections;
         if (currentExplorerPath.length >= 1) {
-            targetCols = data.collections.filter((c: any) => c.name === currentExplorerPath[0]);
+            targetCols = explorerCollections.filter((c: any) => c.name === currentExplorerPath[0]);
         }
         if (currentExplorerPath.length === 0) {
             for (const col of targetCols) {
@@ -3110,7 +3120,7 @@
                             <HardDrive class="w-3.5 h-3.5 text-zinc-500" />
                             <span class="truncate">Root /</span>
                         </button>
-                        {#each data.collections as col (col.id)}
+                        {#each explorerCollections as col (col.id)}
                             <div class="space-y-1">
                                 <div class="flex items-center w-full rounded hover:bg-zinc-800 hover:text-white transition-all group/item {currentExplorerPath.length === 1 && currentExplorerPath[0] === col.name ? 'bg-zinc-800 text-white font-medium' : ''}">
                                     <button onclick={() => navigateToPath([col.name])} class="flex items-center space-x-1.5 py-1 px-1 flex-1 text-left truncate">

@@ -1231,8 +1231,9 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
         }
     }
 
-    // If user is admin (guyssar), add virtual collection for deleted items
-    if (userRole === 'admin' && workspaceView === 'files') {
+    // Keep the admin recycle-bin folder available when Files is opened through
+    // shallow navigation from another workspace tab.
+    if (userRole === 'admin' && needsSubmissionData && submissionsList.some((submission: any) => submission.is_deleted)) {
         collectionsList.push({
             id: 'deleted-drive',
             name: 'deleted',
