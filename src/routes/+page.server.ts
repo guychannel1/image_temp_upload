@@ -2,7 +2,9 @@ import { supabase, isSupabaseConfigured } from '$lib/server/supabase';
 import * as mockDb from '$lib/server/db';
 import { uploadToR2, deleteFromR2, deleteObjectsFromR2 } from '$lib/server/r2';
 import { createSession, destroySession, getCurrentUser } from '$lib/server/auth';
-import { fail } from '@sveltejs/kit';
+import { error, fail } from '@sveltejs/kit';
+import type { Cookies } from '@sveltejs/kit';
+import type { CurrentUser } from '$lib/server/auth';
 import type { PageServerLoad, Actions } from './$types';
 import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
@@ -25,6 +27,52 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 
 function canViewSubmissions(role: string): role is 'admin' | 'staff' {
     return role === 'admin' || role === 'staff';
+}
+
+async function requireRole(cookies: Cookies, allowedRoles: Array<'admin' | 'staff'>, request?: Request): Promise<CurrentUser> {
+    if (request) assertSameOrigin(request);
+    const currentUser = await getCurrentUser(cookies);
+    if (!currentUser) error(401, 'Authentication required');
+    if (!allowedRoles.includes(currentUser.role)) error(403, 'Insufficient permissions');
+    return currentUser;
+}
+
+const requireStaffOrAdmin = (cookies: Cookies, request?: Request) => requireRole(cookies, ['staff', 'admin'], request);
+const requireAdmin = (cookies: Cookies, request?: Request) => requireRole(cookies, ['admin'], request);
+
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 5;
+const loginAttempts = new Map<string, { count: number; windowStartedAt: number; blockedUntil: number }>();
+
+function getRequestKey(request: Request, username: string, clientAddress?: string) {
+    const forwardedFor = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+    return `${clientAddress || forwardedFor || 'unknown'}:${username.toLowerCase()}`;
+}
+
+function assertSameOrigin(request: Request) {
+    const origin = request.headers.get('origin');
+    if (!origin || origin !== new URL(request.url).origin) error(403, 'Cross-origin request blocked');
+}
+
+function consumeLoginAttempt(key: string) {
+    const now = Date.now();
+    const previous = loginAttempts.get(key);
+    const state = !previous || now - previous.windowStartedAt >= LOGIN_WINDOW_MS
+        ? { count: 0, windowStartedAt: now, blockedUntil: 0 }
+        : previous;
+    if (state.blockedUntil > now) return false;
+    state.count += 1;
+    if (state.count > LOGIN_MAX_ATTEMPTS) {
+        state.blockedUntil = now + LOGIN_WINDOW_MS;
+        loginAttempts.set(key, state);
+        return false;
+    }
+    loginAttempts.set(key, state);
+    return true;
+}
+
+function clearLoginAttempts(key: string) {
+    loginAttempts.delete(key);
 }
 
 const PUBLIC_EVIDENCE_COLLECTIONS = [
@@ -489,8 +537,7 @@ function isAttendanceSchemaError(error: any) {
 }
 
 function attendanceMigrationMessage(error?: any) {
-    const detail = error?.message ? ` (${error.message})` : '';
-    return `โครงสร้างตาราง attendance_records ยังไม่ตรงกับระบบ กรุณารัน migration_attendance_records.sql ใน Supabase SQL Editor${detail}`;
+    return 'โครงสร้างตาราง attendance_records ยังไม่ตรงกับระบบ กรุณารัน migration_attendance_records.sql ใน Supabase SQL Editor';
 }
 
 function formatServerError(error: any) {
@@ -1067,7 +1114,7 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
     // available after login so its contents never depend on the currently selected tab.
     const needsParticipants = loggedIn && ['overview', 'participants', 'attendance', 'mapping'].includes(workspaceView ?? '');
     const needsAttendance = loggedIn && workspaceView === 'attendance';
-    const needsSubmissionData = loggedIn && workspaceView !== 'attendance';
+    const needsSubmissionData = loggedIn && ['overview', 'mapping', 'files'].includes(workspaceView ?? '');
     const emptyParticipantLoad = {
         participants: [],
         meta: { source: 'not-loaded', databaseCount: 0, loadedCount: 0, error: '' }
@@ -1264,10 +1311,15 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
 
 export const actions: Actions = {
     // Admin authentication actions
-    login: async ({ request, cookies }) => {
+    login: async ({ request, cookies, getClientAddress }) => {
+        assertSameOrigin(request);
         const data = await request.formData();
         const username = (data.get('username') as string || '').trim();
         const password = data.get('password') as string || '';
+        const loginKey = getRequestKey(request, username, getClientAddress());
+        if (!consumeLoginAttempt(loginKey)) {
+            return fail(429, { success: false, message: 'ลองเข้าสู่ระบบบ่อยเกินไป กรุณารอ 15 นาทีแล้วลองใหม่' });
+        }
 
         const passwordHash = hashPassword(password);
 
@@ -1275,11 +1327,12 @@ export const actions: Actions = {
             try {
                 const { data: user } = await supabase
                     .from('app_users')
-                    .select('*')
+                    .select('username, password_hash, role')
                     .eq('username', username)
                     .maybeSingle();
 
                 if (user && user.password_hash === passwordHash) {
+                    clearLoginAttempts(loginKey);
                     await createSession(user.username, cookies);
                     return { success: true, loggedIn: true, role: user.role, username };
                 }
@@ -1291,6 +1344,7 @@ export const actions: Actions = {
         // Fallback to local memory mock db
         const user = mockDb.appUsers.find(u => u.username === username);
         if (user && user.password_hash === passwordHash) {
+            clearLoginAttempts(loginKey);
             await createSession(user.username, cookies);
             return { success: true, loggedIn: true, role: user.role, username };
         }
@@ -1298,13 +1352,15 @@ export const actions: Actions = {
         return fail(400, { success: false, message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
     },
 
-    logout: async ({ cookies }) => {
+    logout: async ({ request, cookies }) => {
+        assertSameOrigin(request);
         await destroySession(cookies);
         return { success: true, loggedIn: false };
     },
 
     // Collections Management
-    addCollection: async ({ request }) => {
+    addCollection: async ({ request, cookies }) => {
+        await requireStaffOrAdmin(cookies, request);
         const formData = await request.formData();
         const name = formData.get('name') as string;
 
@@ -1334,7 +1390,7 @@ export const actions: Actions = {
                 if (error) throw error;
                 return { success: true, message: 'เพิ่มหัวข้อสำเร็จ' };
             } catch (err: any) {
-                return fail(400, { success: false, message: err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ Supabase' });
+                return fail(400, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
             }
         } else {
             // Mock DB
@@ -1342,12 +1398,13 @@ export const actions: Actions = {
                 mockDb.addCollection(cleanName, true, 500);
                 return { success: true, message: 'เพิ่มหัวข้อจำลองสำเร็จ' };
             } catch (e: any) {
-                return fail(400, { success: false, message: e.message || 'เกิดข้อผิดพลาด' });
+                return fail(400, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
             }
         }
     },
 
-    toggleCollection: async ({ request }) => {
+    toggleCollection: async ({ request, cookies }) => {
+        await requireStaffOrAdmin(cookies, request);
         const formData = await request.formData();
         const id = formData.get('id') as string;
         
@@ -1377,7 +1434,8 @@ export const actions: Actions = {
         }
     },
 
-    deleteCollection: async ({ request }) => {
+    deleteCollection: async ({ request, cookies }) => {
+        await requireStaffOrAdmin(cookies, request);
         const formData = await request.formData();
         const id = formData.get('id') as string;
 
@@ -1418,7 +1476,7 @@ export const actions: Actions = {
 
                 return { success: true, message: 'ลบหัวข้อ (ย้ายรูปภาพไปยังถังขยะ) เรียบร้อย' };
             } catch (err: any) {
-                return fail(500, { success: false, message: err.message || 'ลบล้มเหลว' });
+                return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
             }
         } else {
             mockDb.deleteCollection(id);
@@ -1426,7 +1484,8 @@ export const actions: Actions = {
         }
     },
 
-    restoreCollection: async ({ request }) => {
+    restoreCollection: async ({ request, cookies }) => {
+        await requireStaffOrAdmin(cookies, request);
         const formData = await request.formData();
         const id = formData.get('id') as string;
 
@@ -1467,7 +1526,7 @@ export const actions: Actions = {
 
                 return { success: true, message: 'กู้คืนหัวข้อและรูปภาพทั้งหมดสำเร็จ!' };
             } catch (err: any) {
-                return fail(500, { success: false, message: err.message || 'กู้คืนล้มเหลว' });
+                return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
             }
         } else {
             mockDb.restoreCollection(id);
@@ -1475,7 +1534,8 @@ export const actions: Actions = {
         }
     },
 
-    deleteCollectionPermanently: async ({ request }) => {
+    deleteCollectionPermanently: async ({ request, cookies }) => {
+        await requireAdmin(cookies, request);
         const formData = await request.formData();
         const id = formData.get('id') as string;
 
@@ -1491,7 +1551,7 @@ export const actions: Actions = {
                 if (error) throw error;
                 return { success: true, message: 'ลบหัวข้อแบบถาวรเรียบร้อยแล้ว' };
             } catch (err: any) {
-                return fail(500, { success: false, message: err.message || 'ลบถาวรล้มเหลว' });
+                return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
             }
         } else {
             mockDb.deleteCollectionPermanently(id);
@@ -1500,7 +1560,8 @@ export const actions: Actions = {
     },
 
     // Submissions Management (Soft Delete)
-    deleteSubmissions: async ({ request }) => {
+    deleteSubmissions: async ({ request, cookies }) => {
+        await requireStaffOrAdmin(cookies, request);
         const formData = await request.formData();
         const idsString = formData.get('ids') as string;
 
@@ -1531,6 +1592,7 @@ export const actions: Actions = {
 
     // Permanent Delete Submissions (only allowed for guyssar)
     deleteSubmissionsPermanently: async ({ request, cookies }) => {
+        assertSameOrigin(request);
         const currentUser = await getCurrentUser(cookies);
         if (currentUser?.role !== 'admin') {
             return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการลบรูปภาพถาวร' });
@@ -1585,7 +1647,8 @@ export const actions: Actions = {
     },
 
     // Restore Soft-Deleted Submissions
-    restoreSubmissions: async ({ request }) => {
+    restoreSubmissions: async ({ request, cookies }) => {
+        await requireStaffOrAdmin(cookies, request);
         const formData = await request.formData();
         const idsString = formData.get('ids') as string;
 
@@ -1614,7 +1677,8 @@ export const actions: Actions = {
     },
 
     // Update Collection Submission Limit
-    updateCollectionLimit: async ({ request }) => {
+    updateCollectionLimit: async ({ request, cookies }) => {
+        await requireStaffOrAdmin(cookies, request);
         const formData = await request.formData();
         const id = formData.get('id') as string;
         const limitStr = formData.get('limit') as string;
@@ -1644,6 +1708,7 @@ export const actions: Actions = {
     },
 
     previewParticipantsXlsx: async ({ request, cookies }) => {
+        assertSameOrigin(request);
         const currentUser = await getCurrentUser(cookies);
         if (!canViewSubmissions(currentUser?.role || '')) {
             return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนอัปเดตรายชื่อ' });
@@ -1665,11 +1730,12 @@ export const actions: Actions = {
             };
         } catch (err: any) {
             console.error('[importParticipantsXlsx] error:', err);
-            return fail(500, { success: false, message: err.message || 'นำเข้าไฟล์ XLSX ไม่สำเร็จ' });
+            return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
         }
     },
 
     applyParticipantImportPreview: async ({ request, cookies }) => {
+        assertSameOrigin(request);
         const currentUser = await getCurrentUser(cookies);
         if (!canViewSubmissions(currentUser?.role || '')) {
             return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนอัปเดตรายชื่อ' });
@@ -1690,11 +1756,12 @@ export const actions: Actions = {
             return { success: true, message: `ยืนยันการอัปเดตรายชื่อแล้ว ปัจจุบันมีทั้งหมด ${savedRows.length} รายการ` };
         } catch (err: any) {
             console.error('[applyParticipantImportPreview] error:', err);
-            return fail(500, { success: false, message: err.message || 'อัปเดตรายชื่อไม่สำเร็จ' });
+            return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
         }
     },
 
     saveParticipants: async ({ request, cookies }) => {
+        assertSameOrigin(request);
         const currentUser = await getCurrentUser(cookies);
         if (!canViewSubmissions(currentUser?.role || '')) {
             return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนอัปเดตรายชื่อ' });
@@ -1712,11 +1779,12 @@ export const actions: Actions = {
             return { success: true, message: `บันทึกรายชื่อ ${savedRows.length} รายการเรียบร้อยแล้ว` };
         } catch (err: any) {
             console.error('[saveParticipants] error:', err);
-            return fail(500, { success: false, message: err.message || 'บันทึกรายชื่อไม่สำเร็จ' });
+            return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
         }
     },
 
     addParticipant: async ({ request, cookies }) => {
+        assertSameOrigin(request);
         const currentUser = await getCurrentUser(cookies);
         if (!canViewSubmissions(currentUser?.role || '')) {
             return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนเพิ่มรายชื่อ' });
@@ -1731,11 +1799,12 @@ export const actions: Actions = {
             return { success: true, message: `เพิ่มรายชื่อ "${fullName}" เรียบร้อยแล้ว` };
         } catch (err: any) {
             console.error('[addParticipant] error:', err);
-            return fail(500, { success: false, message: err.message || 'เพิ่มรายชื่อไม่สำเร็จ' });
+            return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
         }
     },
 
     saveAttendance: async ({ request, cookies }) => {
+        assertSameOrigin(request);
         const currentUser = await getCurrentUser(cookies);
         if (!canViewSubmissions(currentUser?.role || '')) {
             return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนบันทึกการเข้างาน' });
@@ -1773,7 +1842,7 @@ export const actions: Actions = {
             return { success: true, message: `บันทึกการเข้างาน ${savedCount} รายการเรียบร้อยแล้ว`, savedDates };
         } catch (err: any) {
             console.error('[saveAttendance] error:', formatServerError(err), err);
-            return fail(500, { success: false, message: err.message || 'บันทึกการเข้างานไม่สำเร็จ' });
+            return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
         }
     },
 
@@ -1789,7 +1858,7 @@ export const actions: Actions = {
             if (isSupabaseConfigured && supabase) {
                 const { data: subs, error } = await supabase
                     .from('submissions')
-                    .select('*')
+                    .select('id, name, collection_name, img_url, is_deleted')
                     .eq('is_deleted', false);
                 if (error) throw error;
                 submissions = (subs ?? []).map(s => ({
@@ -1809,11 +1878,13 @@ export const actions: Actions = {
                 count: status.matches.length
             };
         } catch (err: any) {
-            return fail(500, { success: false, message: err.message || 'ไม่สามารถตรวจสถานะได้' });
+            console.error('[checkEvidenceStatus] error:', err);
+            return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
         }
     },
 
     updateSubmissionMapping: async ({ request, cookies }) => {
+        assertSameOrigin(request);
         const currentUser = await getCurrentUser(cookies);
         if (!canViewSubmissions(currentUser?.role || '')) {
             return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนแก้ไขข้อมูล' });
@@ -1857,11 +1928,12 @@ export const actions: Actions = {
 
             return { success: true, message: 'อัปเดต mapping เรียบร้อยแล้ว' };
         } catch (err: any) {
-            return fail(500, { success: false, message: err.message || 'อัปเดต mapping ไม่สำเร็จ' });
+            return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
         }
     },
 
     updateSubmissionMappings: async ({ request, cookies }) => {
+        assertSameOrigin(request);
         const currentUser = await getCurrentUser(cookies);
         if (!canViewSubmissions(currentUser?.role || '')) {
             return fail(403, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนแก้ไขข้อมูล' });
@@ -1918,12 +1990,13 @@ export const actions: Actions = {
 
             return { success: true, message: `อัปเดต mapping ${mappings.length} รายการเรียบร้อยแล้ว` };
         } catch (err: any) {
-            return fail(500, { success: false, message: err.message || 'อัปเดต mapping ทั้งหมดไม่สำเร็จ' });
+            return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
         }
     },
 
     // Public Student Submission
     submitForm: async ({ request }) => {
+        assertSameOrigin(request);
         const formData = await request.formData();
         const name = formData.get('name') as string;
         const collection_id = formData.get('collection_id') as string;
@@ -2109,7 +2182,7 @@ export const actions: Actions = {
                 console.error('[submitForm] RPC failed:', dbErr);
                 // Rollback: remove the file we just uploaded to R2
                 if (filePath) await deleteFromR2(filePath);
-                return fail(500, { success: false, message: dbErr.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล กรุณาลองใหม่' });
+                return fail(500, { success: false, message: 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่' });
             }
         } else {
             // Fallback to local memory mock db
@@ -2174,7 +2247,8 @@ export const actions: Actions = {
         }
     },
 
-    backupToCloudflare: async ({ cookies, platform }) => {
+    backupToCloudflare: async ({ request, cookies, platform }) => {
+        await requireAdmin(cookies, request);
         const currentUser = await getCurrentUser(cookies);
         if (!currentUser) {
             return fail(401, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
@@ -2187,14 +2261,15 @@ export const actions: Actions = {
             if (result.success) {
                 return { success: true, message: result.message, folderPath: result.folderPath };
             } else {
-                return fail(500, { success: false, message: result.message || 'เกิดข้อผิดพลาดในการสำรองข้อมูล' });
+                return fail(500, { success: false, message: 'ไม่สามารถสำรองข้อมูลได้ กรุณาลองใหม่' });
             }
         } catch (err: any) {
-            return fail(500, { success: false, message: err.message || 'เกิดข้อผิดพลาดที่คาดไม่ถึงในการตั้งค่าคีย์หรือการเชื่อมต่อ' });
+            return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
         }
     },
 
     importBackupJson: async ({ request, cookies, platform }) => {
+        await requireAdmin(cookies, request);
         const currentUser = await getCurrentUser(cookies);
         if (!currentUser) {
             return fail(401, { success: false, message: 'กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
@@ -2398,11 +2473,12 @@ export const actions: Actions = {
             };
         } catch (err: any) {
             console.error('[importBackupJson] Restore error:', err);
-            return fail(500, { success: false, message: err.message || 'เกิดข้อผิดพลาดในการประมวลผลไฟล์ JSON' });
+            return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
         }
     },
 
     createUser: async ({ request, cookies }) => {
+        assertSameOrigin(request);
         const currentUser = await getCurrentUser(cookies);
         if (currentUser?.role !== 'admin') {
             return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการสร้างผู้ใช้ (เฉพาะ guyssar เท่านั้น)' });
@@ -2437,10 +2513,10 @@ export const actions: Actions = {
                     .insert([{ username: newUsername, role, password_hash: passwordHash }]);
 
                 if (error) {
-                    return fail(500, { success: false, message: `ล้มเหลว: ${error.message}` });
+                    return fail(500, { success: false, message: 'การดำเนินการไม่สำเร็จ' });
                 }
             } catch (err: any) {
-                return fail(500, { success: false, message: err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล' });
+                return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
             }
         } else {
             // Mock DB
@@ -2459,6 +2535,7 @@ export const actions: Actions = {
     },
 
     changeUserPassword: async ({ request, cookies }) => {
+        assertSameOrigin(request);
         const currentUser = await getCurrentUser(cookies);
         if (!currentUser) {
             return fail(401, { success: false, message: 'กรุณาเข้าสู่ระบบ' });
@@ -2487,10 +2564,10 @@ export const actions: Actions = {
                     .eq('username', targetUsername);
 
                 if (error) {
-                    return fail(500, { success: false, message: `ล้มเหลว: ${error.message}` });
+                    return fail(500, { success: false, message: 'การดำเนินการไม่สำเร็จ' });
                 }
             } catch (err: any) {
-                return fail(500, { success: false, message: err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล' });
+                return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
             }
         } else {
             // Mock DB
@@ -2505,6 +2582,7 @@ export const actions: Actions = {
     },
 
     deleteUser: async ({ request, cookies }) => {
+        assertSameOrigin(request);
         const currentUser = await getCurrentUser(cookies);
         if (currentUser?.role !== 'admin') {
             return fail(403, { success: false, message: 'ไม่มีสิทธิ์ในการลบผู้ใช้ (เฉพาะ guyssar เท่านั้น)' });
@@ -2525,10 +2603,10 @@ export const actions: Actions = {
                     .eq('username', targetUsername);
 
                 if (error) {
-                    return fail(500, { success: false, message: `ล้มเหลว: ${error.message}` });
+                    return fail(500, { success: false, message: 'การดำเนินการไม่สำเร็จ' });
                 }
             } catch (err: any) {
-                return fail(500, { success: false, message: err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล' });
+                return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
             }
         } else {
             // Mock DB

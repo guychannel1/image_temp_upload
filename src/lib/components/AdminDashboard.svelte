@@ -138,12 +138,13 @@
                 url.searchParams.set('view', tab);
             }
             const currentDataView = data.workspaceView ?? 'overview';
-            const sharedDataLoaded = ['overview', 'participants', 'mapping'].includes(currentDataView);
             const dataAlreadyLoaded = tab === 'attendance'
                 ? currentDataView === 'attendance'
                 : tab === 'files'
-                    ? currentDataView !== 'attendance'
-                    : sharedDataLoaded;
+                    ? ['overview', 'mapping', 'files'].includes(currentDataView)
+                    : tab === 'participants'
+                        ? ['overview', 'participants', 'mapping'].includes(currentDataView)
+                        : ['overview', 'mapping'].includes(currentDataView);
 
             if (dataAlreadyLoaded) {
                 replaceState(`${url.pathname}${url.search}`, {});
