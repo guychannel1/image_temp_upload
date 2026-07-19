@@ -3315,7 +3315,7 @@
             <div class="flex items-start justify-between gap-4 border-b border-zinc-200 pb-4 dark:border-zinc-800">
                 <div>
                     <h3 id="xlsx-download-title" class="text-base font-bold text-zinc-950 dark:text-white">เลือกข้อมูลก่อนดาวน์โหลด XLSX</h3>
-                    <p class="mt-1 text-xs text-zinc-500">เลือกเฉพาะรายการที่ต้องใช้ เพื่อลดข้อมูลในไฟล์</p>
+                    <p class="mt-1 text-xs text-zinc-500">เลือกเฉพาะรายการที่ต้องใช้</p>
                 </div>
                 <button type="button" aria-label="ปิด" onclick={closeXlsxDownloadModal} class="rounded-lg p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-white">✕</button>
             </div>
@@ -3334,11 +3334,11 @@
                             </button>
                             <button type="button" onclick={() => xlsxEvidenceScope = 'complete'} class="rounded-xl border px-3 py-3 text-left transition {xlsxEvidenceScope === 'complete' ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500/20 dark:bg-emerald-500/10' : 'border-zinc-200 hover:border-emerald-300 dark:border-zinc-800 dark:hover:border-emerald-500/50'}">
                                 <div class="text-xs font-bold text-zinc-900 dark:text-white">ครบแล้ว</div>
-                                <div class="mt-1 text-[11px] text-zinc-500">{evidenceStats.complete} รายชื่อ</div>
+                                <div class="mt-1 text-[11px] text-zinc-500">หลักฐานไม่ครบ<br> (ewe + cer)</div>
                             </button>
                             <button type="button" onclick={() => xlsxEvidenceScope = 'incomplete'} class="rounded-xl border px-3 py-3 text-left transition {xlsxEvidenceScope === 'incomplete' ? 'border-amber-500 bg-amber-50 ring-1 ring-amber-500/20 dark:bg-amber-500/10' : 'border-zinc-200 hover:border-amber-300 dark:border-zinc-800 dark:hover:border-amber-500/50'}">
                                 <div class="text-xs font-bold text-zinc-900 dark:text-white">ที่ยังไม่ครบ</div>
-                                <div class="mt-1 text-[11px] text-zinc-500">{allEvidenceReportRows.length - evidenceStats.complete} รายชื่อ</div>
+                                <div class="mt-1 text-[11px] text-zinc-500">หลักฐานครบแล้ว<br> (ewe + cer)</div>
                             </button>
                         </div>
                     </section>
