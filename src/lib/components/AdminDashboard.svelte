@@ -33,6 +33,10 @@
     let isCollectionsPanelOpen = $state(true);
     let isAddColModalOpen = $state(false);
     let isDownloadZipModalOpen = $state(false);
+    let isXlsxDownloadModalOpen = $state(false);
+    let xlsxDownloadMode = $state<'evidence' | 'attendance' | 'combined'>('combined');
+    let xlsxEvidenceScope = $state<'all' | 'complete' | 'incomplete'>('all');
+    let xlsxAttendanceScope = $state<'all' | 'every-day'>('all');
     let isAdminLightboxOpen = $state(false);
     let isBackingUp = $state(false);
     let isProcessing = $state(false);
@@ -1590,8 +1594,38 @@
 </styleSheet>`;
     }
 
+    function openXlsxDownloadModal(mode: 'evidence' | 'attendance' | 'combined') {
+        xlsxDownloadMode = mode;
+        isXlsxDownloadModalOpen = true;
+    }
+
+    function closeXlsxDownloadModal() {
+        isXlsxDownloadModalOpen = false;
+    }
+
+    function filterEvidenceExportRows(rows: any[]) {
+        if (xlsxEvidenceScope === 'complete') return rows.filter((row) => row.eve && row.cer);
+        if (xlsxEvidenceScope === 'incomplete') return rows.filter((row) => !row.eve || !row.cer);
+        return rows;
+    }
+
+    function isPresentForExport(name: string, date: string, period: 'morning' | 'afternoon') {
+        return !!attendanceDraft[attendanceKey(name, date, period)];
+    }
+
+    function isPresentEveryDayForExport(row: any, dates: string[]) {
+        return dates.length > 0 && dates.every((date) =>
+            isPresentForExport(row.fullName, date, 'morning') && isPresentForExport(row.fullName, date, 'afternoon')
+        );
+    }
+
+    function filterAttendanceExportRows(rows: any[], dates: string[]) {
+        if (xlsxAttendanceScope === 'every-day') return rows.filter((row) => isPresentEveryDayForExport(row, dates));
+        return rows;
+    }
+
     async function downloadEvidenceXlsx() {
-        const rows = allEvidenceReportRows;
+        const rows = filterEvidenceExportRows(allEvidenceReportRows);
         const JSZip = (await import('jszip')).default;
         const zip = new JSZip();
         zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1651,8 +1685,8 @@
     }
 
     async function downloadAttendanceXlsx() {
-        const rows = participantRows;
         const dates = attendanceDates;
+        const rows = filterAttendanceExportRows(participantRows, dates);
         const JSZip = (await import('jszip')).default;
         const zip = new JSZip();
         zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1807,7 +1841,10 @@
             const JSZip = (await import('jszip')).default;
         const zip = new JSZip();
         const sheets = [
-            { name: 'evidence_attendance', xml: buildCombinedEvidenceAttendanceWorksheetXml(allEvidenceReportRows, attendanceDates) }
+            { name: 'evidence_attendance', xml: buildCombinedEvidenceAttendanceWorksheetXml(
+                filterAttendanceExportRows(filterEvidenceExportRows(allEvidenceReportRows), attendanceDates),
+                attendanceDates
+            ) }
         ];
 
         zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1867,6 +1904,13 @@
         } finally {
             stopProcessing();
         }
+    }
+
+    async function confirmXlsxDownload() {
+        closeXlsxDownloadModal();
+        if (xlsxDownloadMode === 'evidence') return downloadEvidenceXlsx();
+        if (xlsxDownloadMode === 'attendance') return downloadAttendanceXlsx();
+        return downloadAllXlsx();
     }
 
     function printAttendanceReport() {
@@ -2208,7 +2252,7 @@
                     <Download class="w-4 h-4" />
                     <span>ดาวน์โหลด ZIP</span>
                 </button>
-                <button onclick={downloadAllXlsx} disabled={isProcessing} class="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50 disabled:pointer-events-none dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/15">
+                <button onclick={() => openXlsxDownloadModal('combined')} disabled={isProcessing} class="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50 disabled:pointer-events-none dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/15">
                     <Download class="w-4 h-4" />
                     <span>Download all XLSX (เช็คชื่อ + EWE + CER)</span>
                 </button>
@@ -2370,7 +2414,7 @@
             </div>
             <div class="flex flex-wrap gap-2">
                 {#if adminWorkspaceTab === 'overview'}
-                    <button type="button" onclick={downloadEvidenceXlsx} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">XLSX</button>
+                    <button type="button" onclick={() => openXlsxDownloadModal('evidence')} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">XLSX</button>
                     <button type="button" onclick={printEvidenceReport} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">Print/PDF</button>
                 {/if}
                 {#if adminWorkspaceTab === 'attendance'}
@@ -2394,7 +2438,7 @@
                         <input type="hidden" name="attendance_deleted_dates" value={attendanceDeletedDatesPayload}>
                         <button type="submit" disabled={isProcessing || participantRows.length === 0 || attendanceDates.length === 0} class="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-xs text-white font-semibold">บันทึก</button>
                     </form>
-                    <button type="button" onclick={downloadAttendanceXlsx} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">XLSX</button>
+                    <button type="button" onclick={() => openXlsxDownloadModal('attendance')} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">XLSX</button>
                     <button type="button" onclick={printAttendanceReport} class="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-200">Print/PDF</button>
                 {/if}
             </div>
@@ -2623,14 +2667,11 @@
                                 <div class="flex flex-col sm:flex-row gap-2">
                                     <input bind:value={attendanceSearch} placeholder="ค้นหาลำดับหรือชื่อ" class="flex-1 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-900 dark:text-zinc-200 placeholder-zinc-500 dark:placeholder-zinc-600 focus:outline-none focus:border-brand-500">
                                     <select bind:value={selectedAttendanceDate} class="bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-900 dark:text-zinc-200">
-                                        <option value="all">ทุกวันที่เช็ค</option>
+                                        <option value="all">ทุกวัน</option>
                                         {#each attendanceDates as date (date)}
                                             <option value={date}>{date}</option>
                                         {/each}
                                     </select>
-                                    <div class="rounded-xl border border-zinc-200 dark:border-zinc-800 px-3 py-2 text-xs text-zinc-500 dark:text-zinc-400">
-                                        ขาด {attendanceStats.missingSlots}/{attendanceStats.totalSlots}
-                                    </div>
                                 </div>
                                 <div class="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950/50">
                                     <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
@@ -3262,6 +3303,71 @@
                     <button type="submit" class="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-xs font-semibold">สร้างโฟลเดอร์</button>
                 </div>
             </form>
+        </div>
+    </div>
+{/if}
+
+<!-- Modal: Choose XLSX export scope -->
+{#if isXlsxDownloadModalOpen}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm" role="presentation" onclick={closeXlsxDownloadModal}>
+        <div class="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-5 shadow-2xl dark:border-zinc-800 dark:bg-zinc-950" role="dialog" aria-modal="true" aria-labelledby="xlsx-download-title" tabindex="-1" onclick={(event) => event.stopPropagation()}>
+            <div class="flex items-start justify-between gap-4 border-b border-zinc-200 pb-4 dark:border-zinc-800">
+                <div>
+                    <h3 id="xlsx-download-title" class="text-base font-bold text-zinc-950 dark:text-white">เลือกข้อมูลก่อนดาวน์โหลด XLSX</h3>
+                    <p class="mt-1 text-xs text-zinc-500">เลือกเฉพาะรายการที่ต้องใช้ เพื่อลดข้อมูลในไฟล์</p>
+                </div>
+                <button type="button" aria-label="ปิด" onclick={closeXlsxDownloadModal} class="rounded-lg p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-white">✕</button>
+            </div>
+
+            <div class="mt-5 space-y-5">
+                {#if xlsxDownloadMode === 'evidence' || xlsxDownloadMode === 'combined'}
+                    <section>
+                        <div class="mb-2 flex items-center justify-between">
+                            <h4 class="text-sm font-bold text-zinc-900 dark:text-white">สรุปการส่งหลักฐาน</h4>
+                            <span class="text-[11px] text-zinc-500">EWE + CER</span>
+                        </div>
+                        <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                            <button type="button" onclick={() => xlsxEvidenceScope = 'all'} class="rounded-xl border px-3 py-3 text-left transition {xlsxEvidenceScope === 'all' ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500/20 dark:bg-emerald-500/10' : 'border-zinc-200 hover:border-emerald-300 dark:border-zinc-800 dark:hover:border-emerald-500/50'}">
+                                <div class="text-xs font-bold text-zinc-900 dark:text-white">ทั้งหมด</div>
+                                <div class="mt-1 text-[11px] text-zinc-500">{allEvidenceReportRows.length} รายชื่อ</div>
+                            </button>
+                            <button type="button" onclick={() => xlsxEvidenceScope = 'complete'} class="rounded-xl border px-3 py-3 text-left transition {xlsxEvidenceScope === 'complete' ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500/20 dark:bg-emerald-500/10' : 'border-zinc-200 hover:border-emerald-300 dark:border-zinc-800 dark:hover:border-emerald-500/50'}">
+                                <div class="text-xs font-bold text-zinc-900 dark:text-white">ครบแล้ว</div>
+                                <div class="mt-1 text-[11px] text-zinc-500">{evidenceStats.complete} รายชื่อ</div>
+                            </button>
+                            <button type="button" onclick={() => xlsxEvidenceScope = 'incomplete'} class="rounded-xl border px-3 py-3 text-left transition {xlsxEvidenceScope === 'incomplete' ? 'border-amber-500 bg-amber-50 ring-1 ring-amber-500/20 dark:bg-amber-500/10' : 'border-zinc-200 hover:border-amber-300 dark:border-zinc-800 dark:hover:border-amber-500/50'}">
+                                <div class="text-xs font-bold text-zinc-900 dark:text-white">ที่ยังไม่ครบ</div>
+                                <div class="mt-1 text-[11px] text-zinc-500">{allEvidenceReportRows.length - evidenceStats.complete} รายชื่อ</div>
+                            </button>
+                        </div>
+                    </section>
+                {/if}
+
+                {#if xlsxDownloadMode === 'attendance' || xlsxDownloadMode === 'combined'}
+                    <section>
+                        <div class="mb-2 flex items-center justify-between">
+                            <h4 class="text-sm font-bold text-zinc-900 dark:text-white">เช็คชื่อเข้างาน</h4>
+                            <span class="text-[11px] text-zinc-500">{attendanceDates.length} วัน</span>
+                        </div>
+                        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <button type="button" onclick={() => xlsxAttendanceScope = 'all'} class="rounded-xl border px-3 py-3 text-left transition {xlsxAttendanceScope === 'all' ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500/20 dark:bg-emerald-500/10' : 'border-zinc-200 hover:border-emerald-300 dark:border-zinc-800 dark:hover:border-emerald-500/50'}">
+                                <div class="text-xs font-bold text-zinc-900 dark:text-white">ทั้งหมด</div>
+                                <div class="mt-1 text-[11px] text-zinc-500">{participantRows.length} รายชื่อ</div>
+                            </button>
+                            <button type="button" onclick={() => xlsxAttendanceScope = 'every-day'} class="rounded-xl border px-3 py-3 text-left transition {xlsxAttendanceScope === 'every-day' ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500/20 dark:bg-emerald-500/10' : 'border-zinc-200 hover:border-emerald-300 dark:border-zinc-800 dark:hover:border-emerald-500/50'}">
+                                <div class="text-xs font-bold text-zinc-900 dark:text-white">ทุกวัน</div>
+                                <div class="mt-1 text-[11px] text-zinc-500">เช็คชื่อครบทุกวัน</div>
+                            </button>
+                        </div>
+                    </section>
+                {/if}
+            </div>
+
+            <div class="mt-6 flex justify-end gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+                <button type="button" onclick={closeXlsxDownloadModal} class="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-semibold text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900">ยกเลิก</button>
+                <button type="button" onclick={confirmXlsxDownload} disabled={isProcessing} class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-50">ดาวน์โหลด XLSX</button>
+            </div>
         </div>
     </div>
 {/if}
