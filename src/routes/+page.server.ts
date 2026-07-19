@@ -402,52 +402,54 @@ async function replaceParticipants(rows: Array<{ order: number; fullName: string
             if (error) throw error;
         }
 
-        for (const row of [...updatePlan.changedRows, ...updatePlan.newRows]) {
-            const now = new Date().toISOString();
-            if (!row.existing) {
-                const { error } = await supabase
-                    .from('participants')
-                    .insert({
-                        [orderColumn]: row.order,
-                        ...(includeLegacyOrder ? { order: row.order } : {}),
-                        full_name: row.fullName,
-                        created_at: now,
-                        updated_at: now
-                    });
-                if (error) throw error;
-                continue;
-            }
+        // Batch participant writes so larger lists do not time out after one
+        // request per row.
+        const now = new Date().toISOString();
+        const changedExistingRows = updatePlan.changedRows.map((row) => ({
+            id: row.existing!.id,
+            [orderColumn]: row.order,
+            ...(includeLegacyOrder ? { order: row.order } : {}),
+            full_name: row.fullName,
+            updated_at: now
+        }));
+        for (const rowChunk of chunkArray(changedExistingRows, 500)) {
+            const { error } = await supabase.from('participants').upsert(rowChunk, { onConflict: 'id' });
+            if (error) throw error;
+        }
 
-            if (row.existing.fullName !== row.fullName) {
+        const newRows = updatePlan.newRows.map((row) => ({
+            [orderColumn]: row.order,
+            ...(includeLegacyOrder ? { order: row.order } : {}),
+            full_name: row.fullName,
+            created_at: now,
+            updated_at: now
+        }));
+        for (const rowChunk of chunkArray(newRows, 500)) {
+            const { error } = await supabase.from('participants').insert(rowChunk);
+            if (error) throw error;
+        }
+
+        for (const row of updatePlan.changedRows) {
+            if (row.existing!.fullName !== row.fullName) {
                 const { error: attendanceByIdError } = await supabase
                     .from('attendance_records')
                     .update({ participant_name: row.fullName, updated_at: now })
-                    .eq('participant_id', row.existing.id);
+                    .eq('participant_id', row.existing!.id);
                 if (attendanceByIdError && !isAttendanceSchemaError(attendanceByIdError)) throw attendanceByIdError;
 
                 const { error: attendanceByNameError } = await supabase
                     .from('attendance_records')
                     .update({ participant_name: row.fullName, updated_at: now })
-                    .eq('participant_name', row.existing.fullName);
+                    .eq('participant_name', row.existing!.fullName);
                 if (attendanceByNameError && !isAttendanceSchemaError(attendanceByNameError)) throw attendanceByNameError;
 
                 const { error: submissionsByNameError } = await supabase
                     .from('submissions')
                     .update({ name: row.fullName })
-                    .eq('name', row.existing.fullName);
+                    .eq('name', row.existing!.fullName);
                 if (submissionsByNameError) throw submissionsByNameError;
             }
 
-            const { error } = await supabase
-                .from('participants')
-                .update({
-                    [orderColumn]: row.order,
-                    ...(includeLegacyOrder ? { order: row.order } : {}),
-                    full_name: row.fullName,
-                    updated_at: now
-                })
-                .eq('id', row.existing.id);
-            if (error) throw error;
         }
     } else {
         if (options.preserveMissing) {
@@ -667,14 +669,24 @@ export async function _loadAttendanceRecords(loggedIn: boolean) {
 
     if (isSupabaseConfigured && supabase) {
         try {
-            const { data, error } = await supabase
-                .from('attendance_records')
-                .select('id, participant_name, attendance_date, period, is_present')
-                .or('is_deleted.is.null,is_deleted.eq.false')
-                .order('attendance_date', { ascending: true })
-                .range(0, 20000);
-            if (error) throw error;
-            return attendanceRecordsToRows(data ?? []);
+            // Supabase/PostgREST may cap a response at 1,000 rows even when a
+            // larger range is requested. Paginate explicitly so the later
+            // participants/dates are not silently missing from the dashboard.
+            const pageSize = 1000;
+            const allRows: any[] = [];
+            for (let from = 0; ; from += pageSize) {
+                const { data, error } = await supabase
+                    .from('attendance_records')
+                    .select('id, participant_name, attendance_date, period, is_present')
+                    .or('is_deleted.is.null,is_deleted.eq.false')
+                    .order('attendance_date', { ascending: true })
+                    .order('id', { ascending: true })
+                    .range(from, from + pageSize - 1);
+                if (error) throw error;
+                allRows.push(...(data ?? []));
+                if (!data || data.length < pageSize) break;
+            }
+            return attendanceRecordsToRows(allRows);
         } catch (err: any) {
             console.error('Failed to load attendance records:', isAttendanceSchemaError(err) ? attendanceMigrationMessage(err) : err);
             return [];
@@ -1753,7 +1765,7 @@ export const actions: Actions = {
                 fullName: String(row.fullName ?? '').trim().replace(/\s+/g, ' ')
             })).filter((row: any) => row.fullName.length > 0);
             const savedRows = await replaceParticipants(cleanRows, { preserveMissing: true });
-            return { success: true, message: `ยืนยันการอัปเดตรายชื่อแล้ว ปัจจุบันมีทั้งหมด ${savedRows.length} รายการ` };
+            return { success: true, participants: savedRows, message: `ยืนยันการอัปเดตรายชื่อแล้ว ปัจจุบันมีทั้งหมด ${savedRows.length} รายการ` };
         } catch (err: any) {
             console.error('[applyParticipantImportPreview] error:', err);
             return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });
@@ -1776,7 +1788,7 @@ export const actions: Actions = {
 
         try {
             const savedRows = await replaceParticipants(rows);
-            return { success: true, message: `บันทึกรายชื่อ ${savedRows.length} รายการเรียบร้อยแล้ว` };
+            return { success: true, participants: savedRows, message: `บันทึกรายชื่อ ${savedRows.length} รายการเรียบร้อยแล้ว` };
         } catch (err: any) {
             console.error('[saveParticipants] error:', err);
             return fail(500, { success: false, message: 'เกิดข้อผิดพลาดในการดำเนินการ' });

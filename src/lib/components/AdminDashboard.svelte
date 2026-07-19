@@ -1260,6 +1260,12 @@
         return async ({ result, update }: any) => {
             stopProcessing();
             if (result.type === 'success') {
+                const savedParticipants = (result.data as any)?.participants;
+                if (Array.isArray(savedParticipants) && savedParticipants.length > 0) {
+                    data = { ...data, participants: savedParticipants };
+                    participantSourceText = savedParticipants.map((p: any) => `${p.order}\t${p.fullName}`).join('\n');
+                    participantListText = participantSourceText;
+                }
                 showToast(successTitle, (result.data as any)?.message ?? 'อัปเดตรายชื่อเรียบร้อยแล้ว', 'success');
                 participantAddOrder = '';
                 participantAddName = '';
@@ -2421,10 +2427,14 @@
                 {#if adminWorkspaceTab === 'attendance'}
                     <form method="POST" action="?view=attendance&/saveAttendance" use:enhance={() => {
                         startProcessing('กำลังบันทึกการเข้างาน...');
-                        return async ({ result }) => {
+                        return async ({ result, update }) => {
                             stopProcessing();
                             if (result.type === 'success') {
                                 const savedDates = ((result.data as any)?.savedDates ?? []) as string[];
+                                // Re-run the page load so the participant list and
+                                // all attendance pages come back from the database
+                                // after the action completes.
+                                await update({ reset: false });
                                 commitAttendanceSave(savedDates);
                                 showToast('บันทึกแล้ว', (result.data as any)?.message ?? 'บันทึกการเข้างานเรียบร้อยแล้ว', 'success');
                                 isAttendanceDirty = false;
